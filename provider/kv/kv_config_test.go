@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/abronan/valkeyrie/store"
-	"github.com/containous/flaeg"
+	"github.com/containous/flaeg/parse"
 	"github.com/containous/traefik/provider/label"
 	"github.com/containous/traefik/tls"
 	"github.com/containous/traefik/types"
@@ -32,8 +32,8 @@ func TestProviderBuildConfiguration(t *testing.T) {
 					withPair("routes/route.with.dot/rule", "Host:test.localhost")),
 				backend("backend.with.dot.too",
 					withPair("servers/server.with.dot/url", "http://172.17.0.2:80"),
-					withPair("servers/server.with.dot/weight", "0"),
-					withPair("servers/server.with.dot.without.url/weight", "0")),
+					withPair("servers/server.with.dot/weight", strconv.Itoa(label.DefaultWeight)),
+					withPair("servers/server.with.dot.without.url/weight", strconv.Itoa(label.DefaultWeight))),
 			),
 			expected: &types.Configuration{
 				Backends: map[string]*types.Backend{
@@ -42,7 +42,7 @@ func TestProviderBuildConfiguration(t *testing.T) {
 						Servers: map[string]types.Server{
 							"server.with.dot": {
 								URL:    "http://172.17.0.2:80",
-								Weight: 0,
+								Weight: label.DefaultWeight,
 							},
 						},
 					},
@@ -52,10 +52,163 @@ func TestProviderBuildConfiguration(t *testing.T) {
 						Backend:        "backend.with.dot.too",
 						PassHostHeader: true,
 						EntryPoints:    []string{},
-						BasicAuth:      []string{},
 						Routes: map[string]types.Route{
 							"route.with.dot": {
 								Rule: "Host:test.localhost",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			desc: "basic auth Users",
+			kvPairs: filler("traefik",
+				frontend("frontend",
+					withPair(pathFrontendBackend, "backend"),
+					withPair(pathFrontendAuthHeaderField, "X-WebAuth-User"),
+					withPair(pathFrontendAuthBasicRemoveHeader, "true"),
+					withList(pathFrontendAuthBasicUsers, "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/", "test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"),
+				),
+				backend("backend"),
+			),
+			expected: &types.Configuration{
+				Backends: map[string]*types.Backend{
+					"backend": {
+						LoadBalancer: &types.LoadBalancer{
+							Method: "wrr",
+						},
+					},
+				},
+				Frontends: map[string]*types.Frontend{
+					"frontend": {
+						Backend:        "backend",
+						PassHostHeader: true,
+						EntryPoints:    []string{},
+						Auth: &types.Auth{
+							HeaderField: "X-WebAuth-User",
+							Basic: &types.Basic{
+								RemoveHeader: true,
+								Users: []string{"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
+									"test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			desc: "basic auth UsersFile",
+			kvPairs: filler("traefik",
+				frontend("frontend",
+					withPair(pathFrontendBackend, "backend"),
+					withPair(pathFrontendAuthHeaderField, "X-WebAuth-User"),
+					withPair(pathFrontendAuthBasicUsersFile, ".htpasswd"),
+				),
+				backend("backend"),
+			),
+			expected: &types.Configuration{
+				Backends: map[string]*types.Backend{
+					"backend": {
+						LoadBalancer: &types.LoadBalancer{
+							Method: "wrr",
+						},
+					},
+				},
+				Frontends: map[string]*types.Frontend{
+					"frontend": {
+						Backend:        "backend",
+						PassHostHeader: true,
+						EntryPoints:    []string{},
+						Auth: &types.Auth{
+							HeaderField: "X-WebAuth-User",
+							Basic: &types.Basic{
+								UsersFile: ".htpasswd",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			desc: "digest auth",
+			kvPairs: filler("traefik",
+				frontend("frontend",
+					withPair(pathFrontendBackend, "backend"),
+					withPair(pathFrontendAuthHeaderField, "X-WebAuth-User"),
+					withPair(pathFrontendAuthDigestRemoveHeader, "true"),
+					withList(pathFrontendAuthDigestUsers, "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/", "test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"),
+					withPair(pathFrontendAuthDigestUsersFile, ".htpasswd"),
+				),
+				backend("backend"),
+			),
+			expected: &types.Configuration{
+				Backends: map[string]*types.Backend{
+					"backend": {
+						LoadBalancer: &types.LoadBalancer{
+							Method: "wrr",
+						},
+					},
+				},
+				Frontends: map[string]*types.Frontend{
+					"frontend": {
+						Backend:        "backend",
+						PassHostHeader: true,
+						EntryPoints:    []string{},
+						Auth: &types.Auth{
+							HeaderField: "X-WebAuth-User",
+							Digest: &types.Digest{
+								RemoveHeader: true,
+								Users: []string{"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
+									"test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"},
+								UsersFile: ".htpasswd",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			desc: "forward auth",
+			kvPairs: filler("traefik",
+				frontend("frontend",
+					withPair(pathFrontendBackend, "backend"),
+					withPair(pathFrontendAuthHeaderField, "X-WebAuth-User"),
+					withPair(pathFrontendAuthForwardAddress, "auth.server"),
+					withPair(pathFrontendAuthForwardTrustForwardHeader, "true"),
+					withPair(pathFrontendAuthForwardTLSCa, "ca.crt"),
+					withPair(pathFrontendAuthForwardTLSCaOptional, "true"),
+					withPair(pathFrontendAuthForwardTLSCert, "server.crt"),
+					withPair(pathFrontendAuthForwardTLSKey, "server.key"),
+					withPair(pathFrontendAuthForwardTLSInsecureSkipVerify, "true"),
+				),
+				backend("backend"),
+			),
+			expected: &types.Configuration{
+				Backends: map[string]*types.Backend{
+					"backend": {
+						LoadBalancer: &types.LoadBalancer{
+							Method: "wrr",
+						},
+					},
+				},
+				Frontends: map[string]*types.Frontend{
+					"frontend": {
+						Backend:        "backend",
+						PassHostHeader: true,
+						EntryPoints:    []string{},
+						Auth: &types.Auth{
+							HeaderField: "X-WebAuth-User",
+							Forward: &types.Forward{
+								Address:            "auth.server",
+								TrustForwardHeader: true,
+								TLS: &types.ClientTLS{
+									CA:                 "ca.crt",
+									CAOptional:         true,
+									InsecureSkipVerify: true,
+									Cert:               "server.crt",
+									Key:                "server.key",
+								},
 							},
 						},
 					},
@@ -68,12 +221,15 @@ func TestProviderBuildConfiguration(t *testing.T) {
 				backend("backend1",
 					withPair(pathBackendCircuitBreakerExpression, label.DefaultCircuitBreakerExpression),
 					withPair(pathBackendLoadBalancerMethod, "drr"),
-					withPair(pathBackendLoadBalancerSticky, "true"),
 					withPair(pathBackendLoadBalancerStickiness, "true"),
 					withPair(pathBackendLoadBalancerStickinessCookieName, "tomate"),
+					withPair(pathBackendHealthCheckScheme, "http"),
 					withPair(pathBackendHealthCheckPath, "/health"),
 					withPair(pathBackendHealthCheckPort, "80"),
 					withPair(pathBackendHealthCheckInterval, "30s"),
+					withPair(pathBackendHealthCheckHostname, "foo.com"),
+					withPair(pathBackendHealthCheckHeaders+"Foo", "bar"),
+					withPair(pathBackendHealthCheckHeaders+"Bar", "foo"),
 					withPair(pathBackendMaxConnAmount, "5"),
 					withPair(pathBackendMaxConnExtractorFunc, "client.ip"),
 					withPair(pathBackendBufferingMaxResponseBodyBytes, "10485760"),
@@ -82,21 +238,37 @@ func TestProviderBuildConfiguration(t *testing.T) {
 					withPair(pathBackendBufferingMemRequestBodyBytes, "2097152"),
 					withPair(pathBackendBufferingRetryExpression, "IsNetworkError() && Attempts() <= 2"),
 					withPair("servers/server1/url", "http://172.17.0.2:80"),
-					withPair("servers/server1/weight", "0"),
-					withPair("servers/server2/weight", "0")),
+					withPair("servers/server1/weight", strconv.Itoa(label.DefaultWeight)),
+					withPair("servers/server2/weight", strconv.Itoa(label.DefaultWeight))),
 				frontend("frontend1",
 					withPair(pathFrontendBackend, "backend1"),
 					withPair(pathFrontendPriority, "6"),
 					withPair(pathFrontendPassHostHeader, "false"),
 					withPair(pathFrontendPassTLSCert, "true"),
-					withPair(pathFrontendEntryPoints, "http,https"),
-					withPair(pathFrontendWhiteListSourceRange, "1.1.1.1/24, 1234:abcd::42/32"),
-					withPair(pathFrontendBasicAuth, "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/, test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"),
+					withList(pathFrontendEntryPoints, "http", "https"),
+					withList(pathFrontendWhiteListSourceRange, "1.1.1.1/24", "1234:abcd::42/32"),
+					withPair(pathFrontendWhiteListUseXForwardedFor, "true"),
+
+					withPair(pathFrontendAuthBasicRemoveHeader, "true"),
+					withList(pathFrontendAuthBasicUsers, "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/", "test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"),
+					withPair(pathFrontendAuthBasicUsersFile, ".htpasswd"),
+					withPair(pathFrontendAuthDigestRemoveHeader, "true"),
+					withList(pathFrontendAuthDigestUsers, "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/", "test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"),
+					withPair(pathFrontendAuthDigestUsersFile, ".htpasswd"),
+					withPair(pathFrontendAuthForwardAddress, "auth.server"),
+					withPair(pathFrontendAuthForwardTrustForwardHeader, "true"),
+					withPair(pathFrontendAuthForwardTLSCa, "ca.crt"),
+					withPair(pathFrontendAuthForwardTLSCaOptional, "true"),
+					withPair(pathFrontendAuthForwardTLSCert, "server.crt"),
+					withPair(pathFrontendAuthForwardTLSKey, "server.key"),
+					withPair(pathFrontendAuthForwardTLSInsecureSkipVerify, "true"),
+					withPair(pathFrontendAuthHeaderField, "X-WebAuth-User"),
+
 					withPair(pathFrontendRedirectEntryPoint, "https"),
 					withPair(pathFrontendRedirectRegex, "nope"),
 					withPair(pathFrontendRedirectReplacement, "nope"),
 					withPair(pathFrontendRedirectPermanent, "true"),
-					withErrorPage("foo", "error", "/test1", "500-501, 503-599"),
+					withErrorPage("foo", "error", "/test1", "500-501", "503-599"),
 					withErrorPage("bar", "error", "/test2", "400-405"),
 					withRateLimit("client.ip",
 						withLimit("foo", "6", "12", "18"),
@@ -112,13 +284,15 @@ func TestProviderBuildConfiguration(t *testing.T) {
 					withPair(pathFrontendSSLProxyHeaders+"Content-Type", "application/json; charset=utf-8"),
 					withPair(pathFrontendSSLProxyHeaders+"X-Custom-Header", "test"),
 					withPair(pathFrontendAllowedHosts, "example.com, ssl.example.com"),
-					withPair(pathFrontendHostsProxyHeaders, "foo, bar, goo, hor"),
+					withList(pathFrontendHostsProxyHeaders, "foo", "bar", "goo", "hor"),
 					withPair(pathFrontendSTSSeconds, "666"),
 					withPair(pathFrontendSSLHost, "foo"),
 					withPair(pathFrontendCustomFrameOptionsValue, "foo"),
 					withPair(pathFrontendContentSecurityPolicy, "foo"),
 					withPair(pathFrontendPublicKey, "foo"),
 					withPair(pathFrontendReferrerPolicy, "foo"),
+					withPair(pathFrontendCustomBrowserXSSValue, "foo"),
+					withPair(pathFrontendSSLForceHost, "true"),
 					withPair(pathFrontendSSLRedirect, "true"),
 					withPair(pathFrontendSSLTemporaryRedirect, "true"),
 					withPair(pathFrontendSTSIncludeSubdomains, "true"),
@@ -132,11 +306,11 @@ func TestProviderBuildConfiguration(t *testing.T) {
 					withPair("routes/route1/rule", "Host:test.localhost"),
 					withPair("routes/route2/rule", "Path:/foo")),
 				entry("tls/foo",
-					withPair("entrypoints", "http,https"),
+					withList("entrypoints", "http", "https"),
 					withPair("certificate/certfile", "certfile1"),
 					withPair("certificate/keyfile", "keyfile1")),
 				entry("tls/bar",
-					withPair("entrypoints", "http,https"),
+					withList("entrypoints", "http", "https"),
 					withPair("certificate/certfile", "certfile2"),
 					withPair("certificate/keyfile", "keyfile2")),
 			),
@@ -146,7 +320,7 @@ func TestProviderBuildConfiguration(t *testing.T) {
 						Servers: map[string]types.Server{
 							"server1": {
 								URL:    "http://172.17.0.2:80",
-								Weight: 0,
+								Weight: label.DefaultWeight,
 							},
 						},
 						CircuitBreaker: &types.CircuitBreaker{
@@ -154,7 +328,6 @@ func TestProviderBuildConfiguration(t *testing.T) {
 						},
 						LoadBalancer: &types.LoadBalancer{
 							Method: "drr",
-							Sticky: true,
 							Stickiness: &types.Stickiness{
 								CookieName: "tomate",
 							},
@@ -164,9 +337,15 @@ func TestProviderBuildConfiguration(t *testing.T) {
 							ExtractorFunc: "client.ip",
 						},
 						HealthCheck: &types.HealthCheck{
+							Scheme:   "http",
 							Path:     "/health",
 							Port:     80,
 							Interval: "30s",
+							Hostname: "foo.com",
+							Headers: map[string]string{
+								"Foo": "bar",
+								"Bar": "foo",
+							},
 						},
 						Buffering: &types.Buffering{
 							MaxResponseBodyBytes: 10485760,
@@ -179,12 +358,23 @@ func TestProviderBuildConfiguration(t *testing.T) {
 				},
 				Frontends: map[string]*types.Frontend{
 					"frontend1": {
-						Priority:             6,
-						EntryPoints:          []string{"http", "https"},
-						Backend:              "backend1",
-						PassTLSCert:          true,
-						WhitelistSourceRange: []string{"1.1.1.1/24", "1234:abcd::42/32"},
-						BasicAuth:            []string{"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/", "test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"},
+						Priority:    6,
+						EntryPoints: []string{"http", "https"},
+						Backend:     "backend1",
+						PassTLSCert: true,
+						WhiteList: &types.WhiteList{
+							SourceRange:      []string{"1.1.1.1/24", "1234:abcd::42/32"},
+							UseXForwardedFor: true,
+						},
+						Auth: &types.Auth{
+							HeaderField: "X-WebAuth-User",
+							Basic: &types.Basic{
+								RemoveHeader: true,
+								Users: []string{"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
+									"test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"},
+								UsersFile: ".htpasswd",
+							},
+						},
 						Redirect: &types.Redirect{
 							EntryPoint: "https",
 							Permanent:  true,
@@ -207,12 +397,12 @@ func TestProviderBuildConfiguration(t *testing.T) {
 								"foo": {
 									Average: 6,
 									Burst:   12,
-									Period:  flaeg.Duration(18 * time.Second),
+									Period:  parse.Duration(18 * time.Second),
 								},
 								"bar": {
 									Average: 3,
 									Burst:   6,
-									Period:  flaeg.Duration(9 * time.Second),
+									Period:  parse.Duration(9 * time.Second),
 								},
 							},
 						},
@@ -248,6 +438,8 @@ func TestProviderBuildConfiguration(t *testing.T) {
 							ContentSecurityPolicy:   "foo",
 							PublicKey:               "foo",
 							ReferrerPolicy:          "foo",
+							CustomBrowserXSSValue:   "foo",
+							SSLForceHost:            true,
 							SSLRedirect:             true,
 							SSLTemporaryRedirect:    true,
 							STSIncludeSubdomains:    true,
@@ -664,10 +856,7 @@ func TestProviderGetSlice(t *testing.T) {
 			desc: "multiple entries",
 			kvPairs: filler("traefik",
 				frontend("foo",
-					withPair("entrypoints/0", "courgette"),
-					withPair("entrypoints/1", "carotte"),
-					withPair("entrypoints/2", "tomate"),
-					withPair("entrypoints/3", "aubergine"),
+					withList("entrypoints", "courgette", "carotte", "tomate", "aubergine"),
 				),
 			),
 			keyParts: []string{"traefik/frontends/foo/entrypoints"},
@@ -1020,11 +1209,73 @@ func TestProviderHasStickinessLabel(t *testing.T) {
 				},
 			}
 
-			actual := p.hasStickinessLabel(test.rootPath)
+			actual := p.getLoadBalancer(test.rootPath).Stickiness != nil
 
 			if actual != test.expected {
 				t.Fatalf("expected %v, got %v", test.expected, actual)
 			}
+		})
+	}
+}
+
+func TestWhiteList(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		rootPath string
+		kvPairs  []*store.KVPair
+		expected *types.WhiteList
+	}{
+		{
+			desc:     "should return nil when no white list labels",
+			rootPath: "traefik/frontends/foo",
+			expected: nil,
+		},
+		{
+			desc:     "should return a struct when only range",
+			rootPath: "traefik/frontends/foo",
+			kvPairs: filler("traefik",
+				frontend("foo",
+					withPair(pathFrontendWhiteListSourceRange, "10.10.10.10"))),
+			expected: &types.WhiteList{
+				SourceRange: []string{
+					"10.10.10.10",
+				},
+				UseXForwardedFor: false,
+			},
+		},
+		{
+			desc:     "should return a struct when range and UseXForwardedFor",
+			rootPath: "traefik/frontends/foo",
+			kvPairs: filler("traefik",
+				frontend("foo",
+					withPair(pathFrontendWhiteListSourceRange, "10.10.10.10"),
+					withPair(pathFrontendWhiteListUseXForwardedFor, "true"))),
+			expected: &types.WhiteList{
+				SourceRange: []string{
+					"10.10.10.10",
+				},
+				UseXForwardedFor: true,
+			},
+		},
+		{
+			desc:     "should return nil when only UseXForwardedFor",
+			rootPath: "traefik/frontends/foo",
+			kvPairs: filler("traefik",
+				frontend("foo",
+					withPair(pathFrontendWhiteListUseXForwardedFor, "true"))),
+			expected: nil,
+		},
+	}
+
+	for _, test := range testCases {
+		test := test
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			p := newProviderMock(test.kvPairs)
+
+			actual := p.getWhiteList(test.rootPath)
+			assert.Equal(t, test.expected, actual)
 		})
 	}
 }
@@ -1130,7 +1381,7 @@ func TestProviderGetErrorPages(t *testing.T) {
 			rootPath: "traefik/frontends/foo",
 			kvPairs: filler("traefik",
 				frontend("foo",
-					withErrorPage("foo", "error", "/test1", "500-501, 503-599"),
+					withErrorPage("foo", "error", "/test1", "500-501", "503-599"),
 					withErrorPage("bar", "error", "/test2", "400-405"))),
 			expected: map[string]*types.ErrorPage{
 				"foo": {
@@ -1188,12 +1439,12 @@ func TestProviderGetRateLimit(t *testing.T) {
 					"foo": {
 						Average: 6,
 						Burst:   12,
-						Period:  flaeg.Duration(18 * time.Second),
+						Period:  parse.Duration(18 * time.Second),
 					},
 					"bar": {
 						Average: 3,
 						Burst:   6,
-						Period:  flaeg.Duration(9 * time.Second),
+						Period:  parse.Duration(9 * time.Second),
 					},
 				},
 			},
@@ -1416,6 +1667,16 @@ func TestProviderGetHeaders(t *testing.T) {
 			},
 		},
 		{
+			desc:     "Custom Browser XSS Value",
+			rootPath: "traefik/frontends/foo",
+			kvPairs: filler("traefik",
+				frontend("foo",
+					withPair(pathFrontendCustomBrowserXSSValue, "foo"))),
+			expected: &types.Headers{
+				CustomBrowserXSSValue: "foo",
+			},
+		},
+		{
 			desc:     "Content Security Policy",
 			rootPath: "traefik/frontends/foo",
 			kvPairs: filler("traefik",
@@ -1498,12 +1759,10 @@ func TestProviderGetLoadBalancer(t *testing.T) {
 			kvPairs: filler("traefik",
 				backend("foo",
 					withPair(pathBackendLoadBalancerMethod, "drr"),
-					withPair(pathBackendLoadBalancerSticky, "true"),
 					withPair(pathBackendLoadBalancerStickiness, "true"),
 					withPair(pathBackendLoadBalancerStickinessCookieName, "aubergine"))),
 			expected: &types.LoadBalancer{
 				Method: "drr",
-				Sticky: true,
 				Stickiness: &types.Stickiness{
 					CookieName: "aubergine",
 				},
@@ -1525,17 +1784,6 @@ func TestProviderGetLoadBalancer(t *testing.T) {
 					withPair(pathBackendLoadBalancerMethod, "drr"))),
 			expected: &types.LoadBalancer{
 				Method: "drr",
-			},
-		},
-		{
-			desc:     "when sticky is set",
-			rootPath: "traefik/backends/foo",
-			kvPairs: filler("traefik",
-				backend("foo",
-					withPair(pathBackendLoadBalancerSticky, "true"))),
-			expected: &types.LoadBalancer{
-				Method: "wrr",
-				Sticky: true,
 			},
 		},
 		{
@@ -1852,6 +2100,99 @@ func TestProviderGetTLSes(t *testing.T) {
 	}
 }
 
+func TestProviderGetAuth(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		rootPath string
+		kvPairs  []*store.KVPair
+		expected *types.Auth
+	}{
+		{
+			desc:     "should return nil when no data",
+			expected: nil,
+		},
+		{
+			desc:     "should return a valid basic auth",
+			rootPath: "traefik/frontends/foo",
+			kvPairs: filler("traefik",
+				frontend("foo",
+					withPair(pathFrontendAuthBasicRemoveHeader, "true"),
+					withList(pathFrontendAuthBasicUsers, "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/", "test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"),
+					withPair(pathFrontendAuthBasicUsersFile, ".htpasswd"),
+					withPair(pathFrontendAuthHeaderField, "X-WebAuth-User"))),
+			expected: &types.Auth{
+				HeaderField: "X-WebAuth-User",
+				Basic: &types.Basic{
+					RemoveHeader: true,
+					Users: []string{"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
+						"test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"},
+					UsersFile: ".htpasswd",
+				},
+			},
+		},
+		{
+			desc:     "should return a valid digest auth",
+			rootPath: "traefik/frontends/foo",
+			kvPairs: filler("traefik",
+				frontend("foo",
+					withList(pathFrontendAuthDigestUsers, "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/", "test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"),
+					withPair(pathFrontendAuthDigestUsersFile, ".htpasswd"),
+					withPair(pathFrontendAuthHeaderField, "X-WebAuth-User"),
+				)),
+			expected: &types.Auth{
+				HeaderField: "X-WebAuth-User",
+				Digest: &types.Digest{
+					Users: []string{"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
+						"test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"},
+					UsersFile: ".htpasswd",
+				},
+			},
+		},
+		{
+			desc:     "should return a valid forward auth",
+			rootPath: "traefik/frontends/foo",
+			kvPairs: filler("traefik",
+				frontend("foo",
+					withPair(pathFrontendAuthForwardAddress, "auth.server"),
+					withPair(pathFrontendAuthForwardTrustForwardHeader, "true"),
+					withPair(pathFrontendAuthForwardTLSCa, "ca.crt"),
+					withPair(pathFrontendAuthForwardTLSCaOptional, "true"),
+					withPair(pathFrontendAuthForwardTLSCert, "server.crt"),
+					withPair(pathFrontendAuthForwardTLSKey, "server.key"),
+					withPair(pathFrontendAuthForwardTLSInsecureSkipVerify, "true"),
+					withPair(pathFrontendAuthHeaderField, "X-WebAuth-User"),
+				)),
+			expected: &types.Auth{
+				HeaderField: "X-WebAuth-User",
+				Forward: &types.Forward{
+					Address:            "auth.server",
+					TrustForwardHeader: true,
+					TLS: &types.ClientTLS{
+						CA:                 "ca.crt",
+						CAOptional:         true,
+						InsecureSkipVerify: true,
+						Cert:               "server.crt",
+						Key:                "server.key",
+					},
+				},
+			},
+		},
+	}
+
+	for _, test := range testCases {
+		test := test
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			p := newProviderMock(test.kvPairs)
+
+			result := p.getAuth(test.rootPath)
+
+			assert.Equal(t, test.expected, result)
+		})
+	}
+}
+
 func TestProviderGetRoutes(t *testing.T) {
 	testCases := []struct {
 		desc     string
@@ -1934,7 +2275,7 @@ func TestProviderGetServers(t *testing.T) {
 			expected: map[string]types.Server{
 				"server1": {
 					URL:    "http://172.17.0.2:80",
-					Weight: 0,
+					Weight: label.DefaultWeight,
 				},
 			},
 		},
@@ -1949,7 +2290,7 @@ func TestProviderGetServers(t *testing.T) {
 			expected: map[string]types.Server{
 				"server1": {
 					URL:    "http://172.17.0.2:80",
-					Weight: 0,
+					Weight: label.DefaultWeight,
 				},
 				"server2": {
 					URL:    "http://172.17.0.3:80",

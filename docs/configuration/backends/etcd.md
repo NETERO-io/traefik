@@ -1,13 +1,13 @@
-# Etcd Backend
+# Etcd Provider
 
-Træfik can be configured to use Etcd as a backend configuration.
+Træfik can be configured to use Etcd as a provider.
 
 ```toml
 ################################################################
-# Etcd configuration backend
+# Etcd Provider
 ################################################################
 
-# Enable Etcd configuration backend.
+# Enable Etcd Provider.
 [etcd]
 
 # Etcd server endpoint.
@@ -31,16 +31,6 @@ watch = true
 #
 prefix = "/traefik"
 
-# Force to use API V3 (otherwise still use API V2)
-#
-# Deprecated
-#
-# Optional
-# Default: false
-#
-useAPIV3 = true
-
-
 # Override default configuration template.
 # For advanced users :)
 #
@@ -63,13 +53,9 @@ useAPIV3 = true
 #    ca = "/etc/ssl/ca.crt"
 #    cert = "/etc/ssl/etcd.crt"
 #    key = "/etc/ssl/etcd.key"
-#    insecureskipverify = true
+#    insecureSkipVerify = true
 ```
 
-To enable constraints see [backend-specific constraints section](/configuration/commons/#backend-specific).
+To enable constraints see [provider-specific constraints section](/configuration/commons/#provider-specific).
 
 Please refer to the [Key Value storage structure](/user-guide/kv-config/#key-value-storage-structure) section to get documentation on Traefik KV structure.
-
-!!! note
-    The option `useAPIV3` allows using Etcd API V3 only if it's set to true.
-    This option is **deprecated** and API V2 won't be supported in the future.

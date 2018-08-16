@@ -5,12 +5,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/xenolf/lego/log"
 )
 
 type preCheckDNSFunc func(fqdn, value string) (bool, error)
@@ -29,6 +29,7 @@ var defaultNameservers = []string{
 	"google-public-dns-b.google.com:53",
 }
 
+// RecursiveNameservers are used to pre-check DNS propagations
 var RecursiveNameservers = getNameservers(defaultResolvConf, defaultNameservers)
 
 // DNSTimeout is used to override the default DNS timeout of 10 seconds.
@@ -57,8 +58,7 @@ func getNameservers(path string, defaults []string) []string {
 func DNS01Record(domain, keyAuth string) (fqdn string, value string, ttl int) {
 	keyAuthShaBytes := sha256.Sum256([]byte(keyAuth))
 	// base64URL encoding without padding
-	keyAuthSha := base64.URLEncoding.EncodeToString(keyAuthShaBytes[:sha256.Size])
-	value = strings.TrimRight(keyAuthSha, "=")
+	value = base64.RawURLEncoding.EncodeToString(keyAuthShaBytes[:sha256.Size])
 	ttl = 120
 	fqdn = fmt.Sprintf("_acme-challenge.%s.", domain)
 	return
@@ -72,10 +72,10 @@ type dnsChallenge struct {
 }
 
 func (s *dnsChallenge) Solve(chlng challenge, domain string) error {
-	logf("[INFO][%s] acme: Trying to solve DNS-01", domain)
+	log.Infof("[%s] acme: Trying to solve DNS-01", domain)
 
 	if s.provider == nil {
-		return errors.New("No DNS Provider configured")
+		return errors.New("no DNS Provider configured")
 	}
 
 	// Generate the Key Authorization for the challenge
@@ -86,18 +86,18 @@ func (s *dnsChallenge) Solve(chlng challenge, domain string) error {
 
 	err = s.provider.Present(domain, chlng.Token, keyAuth)
 	if err != nil {
-		return fmt.Errorf("Error presenting token: %s", err)
+		return fmt.Errorf("error presenting token: %s", err)
 	}
 	defer func() {
 		err := s.provider.CleanUp(domain, chlng.Token, keyAuth)
 		if err != nil {
-			log.Printf("Error cleaning up %s: %v ", domain, err)
+			log.Warnf("Error cleaning up %s: %v ", domain, err)
 		}
 	}()
 
 	fqdn, value, _ := DNS01Record(domain, keyAuth)
 
-	logf("[INFO][%s] Checking DNS record propagation using %+v", domain, RecursiveNameservers)
+	log.Infof("[%s] Checking DNS record propagation using %+v", domain, RecursiveNameservers)
 
 	var timeout, interval time.Duration
 	switch provider := s.provider.(type) {
@@ -114,7 +114,7 @@ func (s *dnsChallenge) Solve(chlng challenge, domain string) error {
 		return err
 	}
 
-	return s.validate(s.jws, domain, chlng.URI, challenge{Resource: "challenge", Type: chlng.Type, Token: chlng.Token, KeyAuthorization: keyAuth})
+	return s.validate(s.jws, domain, chlng.URL, challenge{Type: chlng.Type, Token: chlng.Token, KeyAuthorization: keyAuth})
 }
 
 // checkDNSPropagation checks if the expected TXT record has been propagated to all authoritative nameservers.

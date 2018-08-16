@@ -14,6 +14,9 @@ import (
 	"time"
 )
 
+// DefaultDomain Traefik domain for the default certificate
+const DefaultDomain = "TRAEFIK DEFAULT CERT"
+
 // DefaultCertificate generates random TLS certificates
 func DefaultCertificate() (*tls.Certificate, error) {
 	randomBytes := make([]byte, 100)
@@ -71,13 +74,13 @@ func derCert(privKey *rsa.PrivateKey, expiration time.Time, domain string) ([]by
 	}
 
 	if expiration.IsZero() {
-		expiration = time.Now().Add(365)
+		expiration = time.Now().Add(365 * (24 * time.Hour))
 	}
 
 	template := x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			CommonName: "TRAEFIK DEFAULT CERT",
+			CommonName: DefaultDomain,
 		},
 		NotBefore: time.Now(),
 		NotAfter:  expiration,

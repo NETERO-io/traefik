@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/xenolf/lego/acme"
+	"github.com/xenolf/lego/platform/config/env"
 )
 
 // rackspaceAPIURL represents the Identity API endpoint to call
@@ -22,15 +22,19 @@ var rackspaceAPIURL = "https://identity.api.rackspacecloud.com/v2.0/tokens"
 type DNSProvider struct {
 	token            string
 	cloudDNSEndpoint string
+	client           *http.Client
 }
 
 // NewDNSProvider returns a DNSProvider instance configured for Rackspace.
 // Credentials must be passed in the environment variables: RACKSPACE_USER
 // and RACKSPACE_API_KEY.
 func NewDNSProvider() (*DNSProvider, error) {
-	user := os.Getenv("RACKSPACE_USER")
-	key := os.Getenv("RACKSPACE_API_KEY")
-	return NewDNSProviderCredentials(user, key)
+	values, err := env.Get("RACKSPACE_USER", "RACKSPACE_API_KEY")
+	if err != nil {
+		return nil, fmt.Errorf("Rackspace: %v", err)
+	}
+
+	return NewDNSProviderCredentials(values["RACKSPACE_USER"], values["RACKSPACE_API_KEY"])
 }
 
 // NewDNSProviderCredentials uses the supplied credentials to return a
@@ -41,35 +45,7 @@ func NewDNSProviderCredentials(user, key string) (*DNSProvider, error) {
 		return nil, fmt.Errorf("Rackspace credentials missing")
 	}
 
-	type APIKeyCredentials struct {
-		Username string `json:"username"`
-		APIKey   string `json:"apiKey"`
-	}
-
-	type Auth struct {
-		APIKeyCredentials `json:"RAX-KSKEY:apiKeyCredentials"`
-	}
-
-	type RackspaceAuthData struct {
-		Auth `json:"auth"`
-	}
-
-	type RackspaceIdentity struct {
-		Access struct {
-			ServiceCatalog []struct {
-				Endpoints []struct {
-					PublicURL string `json:"publicURL"`
-					TenantID  string `json:"tenantId"`
-				} `json:"endpoints"`
-				Name string `json:"name"`
-			} `json:"serviceCatalog"`
-			Token struct {
-				ID string `json:"id"`
-			} `json:"token"`
-		} `json:"access"`
-	}
-
-	authData := RackspaceAuthData{
+	authData := AuthData{
 		Auth: Auth{
 			APIKeyCredentials: APIKeyCredentials{
 				Username: user,
@@ -83,16 +59,16 @@ func NewDNSProviderCredentials(user, key string) (*DNSProvider, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", rackspaceAPIURL, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, rackspaceAPIURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("Error querying Rackspace Identity API: %v", err)
+		return nil, fmt.Errorf("error querying Rackspace Identity API: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -100,7 +76,7 @@ func NewDNSProviderCredentials(user, key string) (*DNSProvider, error) {
 		return nil, fmt.Errorf("Rackspace Authentication failed. Response code: %d", resp.StatusCode)
 	}
 
-	var rackspaceIdentity RackspaceIdentity
+	var rackspaceIdentity Identity
 	err = json.NewDecoder(resp.Body).Decode(&rackspaceIdentity)
 	if err != nil {
 		return nil, err
@@ -115,25 +91,26 @@ func NewDNSProviderCredentials(user, key string) (*DNSProvider, error) {
 		}
 	}
 	if dnsEndpoint == "" {
-		return nil, fmt.Errorf("Failed to populate DNS endpoint, check Rackspace API for changes.")
+		return nil, fmt.Errorf("failed to populate DNS endpoint, check Rackspace API for changes")
 	}
 
 	return &DNSProvider{
 		token:            rackspaceIdentity.Access.Token.ID,
 		cloudDNSEndpoint: dnsEndpoint,
+		client:           client,
 	}, nil
 }
 
 // Present creates a TXT record to fulfil the dns-01 challenge
-func (c *DNSProvider) Present(domain, token, keyAuth string) error {
+func (d *DNSProvider) Present(domain, token, keyAuth string) error {
 	fqdn, value, _ := acme.DNS01Record(domain, keyAuth)
-	zoneID, err := c.getHostedZoneID(fqdn)
+	zoneID, err := d.getHostedZoneID(fqdn)
 	if err != nil {
 		return err
 	}
 
-	rec := RackspaceRecords{
-		RackspaceRecord: []RackspaceRecord{{
+	rec := Records{
+		Record: []Record{{
 			Name: acme.UnFqdn(fqdn),
 			Type: "TXT",
 			Data: value,
@@ -146,38 +123,30 @@ func (c *DNSProvider) Present(domain, token, keyAuth string) error {
 		return err
 	}
 
-	_, err = c.makeRequest("POST", fmt.Sprintf("/domains/%d/records", zoneID), bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-
-	return nil
+	_, err = d.makeRequest(http.MethodPost, fmt.Sprintf("/domains/%d/records", zoneID), bytes.NewReader(body))
+	return err
 }
 
 // CleanUp removes the TXT record matching the specified parameters
-func (c *DNSProvider) CleanUp(domain, token, keyAuth string) error {
+func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
 	fqdn, _, _ := acme.DNS01Record(domain, keyAuth)
-	zoneID, err := c.getHostedZoneID(fqdn)
+	zoneID, err := d.getHostedZoneID(fqdn)
 	if err != nil {
 		return err
 	}
 
-	record, err := c.findTxtRecord(fqdn, zoneID)
+	record, err := d.findTxtRecord(fqdn, zoneID)
 	if err != nil {
 		return err
 	}
 
-	_, err = c.makeRequest("DELETE", fmt.Sprintf("/domains/%d/records?id=%s", zoneID, record.ID), nil)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	_, err = d.makeRequest(http.MethodDelete, fmt.Sprintf("/domains/%d/records?id=%s", zoneID, record.ID), nil)
+	return err
 }
 
 // getHostedZoneID performs a lookup to get the DNS zone which needs
 // modifying for a given FQDN
-func (c *DNSProvider) getHostedZoneID(fqdn string) (int, error) {
+func (d *DNSProvider) getHostedZoneID(fqdn string) (int, error) {
 	// HostedZones represents the response when querying Rackspace DNS zones
 	type ZoneSearchResponse struct {
 		TotalEntries int `json:"totalEntries"`
@@ -192,7 +161,7 @@ func (c *DNSProvider) getHostedZoneID(fqdn string) (int, error) {
 		return 0, err
 	}
 
-	result, err := c.makeRequest("GET", fmt.Sprintf("/domains?name=%s", acme.UnFqdn(authZone)), nil)
+	result, err := d.makeRequest(http.MethodGet, fmt.Sprintf("/domains?name=%s", acme.UnFqdn(authZone)), nil)
 	if err != nil {
 		return 0, err
 	}
@@ -205,59 +174,58 @@ func (c *DNSProvider) getHostedZoneID(fqdn string) (int, error) {
 
 	// If nothing was returned, or for whatever reason more than 1 was returned (the search uses exact match, so should not occur)
 	if zoneSearchResponse.TotalEntries != 1 {
-		return 0, fmt.Errorf("Found %d zones for %s in Rackspace for domain %s", zoneSearchResponse.TotalEntries, authZone, fqdn)
+		return 0, fmt.Errorf("found %d zones for %s in Rackspace for domain %s", zoneSearchResponse.TotalEntries, authZone, fqdn)
 	}
 
 	return zoneSearchResponse.HostedZones[0].ID, nil
 }
 
 // findTxtRecord searches a DNS zone for a TXT record with a specific name
-func (c *DNSProvider) findTxtRecord(fqdn string, zoneID int) (*RackspaceRecord, error) {
-	result, err := c.makeRequest("GET", fmt.Sprintf("/domains/%d/records?type=TXT&name=%s", zoneID, acme.UnFqdn(fqdn)), nil)
+func (d *DNSProvider) findTxtRecord(fqdn string, zoneID int) (*Record, error) {
+	result, err := d.makeRequest(http.MethodGet, fmt.Sprintf("/domains/%d/records?type=TXT&name=%s", zoneID, acme.UnFqdn(fqdn)), nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var records RackspaceRecords
+	var records Records
 	err = json.Unmarshal(result, &records)
 	if err != nil {
 		return nil, err
 	}
 
-	recordsLength := len(records.RackspaceRecord)
+	recordsLength := len(records.Record)
 	switch recordsLength {
 	case 1:
-		break
 	case 0:
-		return nil, fmt.Errorf("No TXT record found for %s", fqdn)
+		return nil, fmt.Errorf("no TXT record found for %s", fqdn)
 	default:
-		return nil, fmt.Errorf("More than 1 TXT record found for %s", fqdn)
+		return nil, fmt.Errorf("more than 1 TXT record found for %s", fqdn)
 	}
 
-	return &records.RackspaceRecord[0], nil
+	return &records.Record[0], nil
 }
 
 // makeRequest is a wrapper function used for making DNS API requests
-func (c *DNSProvider) makeRequest(method, uri string, body io.Reader) (json.RawMessage, error) {
-	url := c.cloudDNSEndpoint + uri
+func (d *DNSProvider) makeRequest(method, uri string, body io.Reader) (json.RawMessage, error) {
+	url := d.cloudDNSEndpoint + uri
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("X-Auth-Token", c.token)
+	req.Header.Set("X-Auth-Token", d.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	client := http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("Error querying DNS API: %v", err)
+		return nil, fmt.Errorf("error querying DNS API: %v", err)
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		return nil, fmt.Errorf("Request failed for %s %s. Response code: %d", method, url, resp.StatusCode)
+		return nil, fmt.Errorf("request failed for %s %s. Response code: %d", method, url, resp.StatusCode)
 	}
 
 	var r json.RawMessage
@@ -269,13 +237,45 @@ func (c *DNSProvider) makeRequest(method, uri string, body io.Reader) (json.RawM
 	return r, nil
 }
 
-// RackspaceRecords is the list of records sent/received from the DNS API
-type RackspaceRecords struct {
-	RackspaceRecord []RackspaceRecord `json:"records"`
+// APIKeyCredentials API credential
+type APIKeyCredentials struct {
+	Username string `json:"username"`
+	APIKey   string `json:"apiKey"`
 }
 
-// RackspaceRecord represents a Rackspace DNS record
-type RackspaceRecord struct {
+// Auth auth credentials
+type Auth struct {
+	APIKeyCredentials `json:"RAX-KSKEY:apiKeyCredentials"`
+}
+
+// AuthData Auth data
+type AuthData struct {
+	Auth `json:"auth"`
+}
+
+// Identity  Identity
+type Identity struct {
+	Access struct {
+		ServiceCatalog []struct {
+			Endpoints []struct {
+				PublicURL string `json:"publicURL"`
+				TenantID  string `json:"tenantId"`
+			} `json:"endpoints"`
+			Name string `json:"name"`
+		} `json:"serviceCatalog"`
+		Token struct {
+			ID string `json:"id"`
+		} `json:"token"`
+	} `json:"access"`
+}
+
+// Records is the list of records sent/received from the DNS API
+type Records struct {
+	Record []Record `json:"records"`
+}
+
+// Record represents a Rackspace DNS record
+type Record struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
 	Data string `json:"data"`

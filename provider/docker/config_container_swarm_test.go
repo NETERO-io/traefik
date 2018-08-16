@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/containous/flaeg"
+	"github.com/containous/flaeg/parse"
 	"github.com/containous/traefik/provider/label"
 	"github.com/containous/traefik/types"
 	docker "github.com/docker/docker/api/types"
@@ -46,7 +46,6 @@ func TestSwarmBuildConfiguration(t *testing.T) {
 					Backend:        "backend-test",
 					PassHostHeader: true,
 					EntryPoints:    []string{},
-					BasicAuth:      []string{},
 					Routes: map[string]types.Route{
 						"route-frontend-Host-test-docker-localhost-0": {
 							Rule: "Host:test.docker.localhost",
@@ -57,9 +56,9 @@ func TestSwarmBuildConfiguration(t *testing.T) {
 			expectedBackends: map[string]*types.Backend{
 				"backend-test": {
 					Servers: map[string]types.Server{
-						"server-test": {
+						"server-test-842895ca2aca17f6ee36ddb2f621194d": {
 							URL:    "http://127.0.0.1:80",
-							Weight: 0,
+							Weight: label.DefaultWeight,
 						},
 					},
 				},
@@ -95,6 +94,215 @@ func TestSwarmBuildConfiguration(t *testing.T) {
 			},
 		},
 		{
+			desc: "when frontend basic auth configuration",
+			services: []swarm.Service{
+				swarmService(
+					serviceName("test"),
+					serviceLabels(map[string]string{
+						label.TraefikPort:                          "80",
+						label.TraefikFrontendAuthBasicUsers:        "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/,test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0",
+						label.TraefikFrontendAuthBasicUsersFile:    ".htpasswd",
+						label.TraefikFrontendAuthBasicRemoveHeader: "true",
+					}),
+					withEndpointSpec(modeVIP),
+					withEndpoint(virtualIP("1", "127.0.0.1/24")),
+				),
+			},
+			expectedFrontends: map[string]*types.Frontend{
+				"frontend-Host-test-docker-localhost-0": {
+					Backend:        "backend-test",
+					PassHostHeader: true,
+					EntryPoints:    []string{},
+					Auth: &types.Auth{
+						Basic: &types.Basic{
+							RemoveHeader: true,
+							Users: []string{"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
+								"test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"},
+							UsersFile: ".htpasswd",
+						},
+					},
+					Routes: map[string]types.Route{
+						"route-frontend-Host-test-docker-localhost-0": {
+							Rule: "Host:test.docker.localhost",
+						},
+					},
+				},
+			},
+			expectedBackends: map[string]*types.Backend{
+				"backend-test": {
+					Servers: map[string]types.Server{
+						"server-test-842895ca2aca17f6ee36ddb2f621194d": {
+							URL:    "http://127.0.0.1:80",
+							Weight: label.DefaultWeight,
+						},
+					},
+				},
+			},
+			networks: map[string]*docker.NetworkResource{
+				"1": {
+					Name: "foo",
+				},
+			},
+		},
+		{
+			desc: "when frontend basic auth configuration backward compatibility",
+			services: []swarm.Service{
+				swarmService(
+					serviceName("test"),
+					serviceLabels(map[string]string{
+						label.TraefikPort:              "80",
+						label.TraefikFrontendAuthBasic: "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/,test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0",
+					}),
+					withEndpointSpec(modeVIP),
+					withEndpoint(virtualIP("1", "127.0.0.1/24")),
+				),
+			},
+			expectedFrontends: map[string]*types.Frontend{
+				"frontend-Host-test-docker-localhost-0": {
+					Backend:        "backend-test",
+					PassHostHeader: true,
+					EntryPoints:    []string{},
+					Auth: &types.Auth{
+						Basic: &types.Basic{
+							Users: []string{"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
+								"test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"},
+						},
+					},
+					Routes: map[string]types.Route{
+						"route-frontend-Host-test-docker-localhost-0": {
+							Rule: "Host:test.docker.localhost",
+						},
+					},
+				},
+			},
+			expectedBackends: map[string]*types.Backend{
+				"backend-test": {
+					Servers: map[string]types.Server{
+						"server-test-842895ca2aca17f6ee36ddb2f621194d": {
+							URL:    "http://127.0.0.1:80",
+							Weight: label.DefaultWeight,
+						},
+					},
+				},
+			},
+			networks: map[string]*docker.NetworkResource{
+				"1": {
+					Name: "foo",
+				},
+			},
+		},
+		{
+			desc: "when frontend digest auth configuration",
+			services: []swarm.Service{
+				swarmService(
+					serviceName("test"),
+					serviceLabels(map[string]string{
+						label.TraefikPort:                           "80",
+						label.TraefikFrontendAuthDigestUsers:        "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/,test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0",
+						label.TraefikFrontendAuthDigestUsersFile:    ".htpasswd",
+						label.TraefikFrontendAuthDigestRemoveHeader: "true",
+					}),
+					withEndpointSpec(modeVIP),
+					withEndpoint(virtualIP("1", "127.0.0.1/24")),
+				),
+			},
+			expectedFrontends: map[string]*types.Frontend{
+				"frontend-Host-test-docker-localhost-0": {
+					Backend:        "backend-test",
+					PassHostHeader: true,
+					EntryPoints:    []string{},
+					Auth: &types.Auth{
+						Digest: &types.Digest{
+							RemoveHeader: true,
+							Users: []string{"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
+								"test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"},
+							UsersFile: ".htpasswd",
+						},
+					},
+					Routes: map[string]types.Route{
+						"route-frontend-Host-test-docker-localhost-0": {
+							Rule: "Host:test.docker.localhost",
+						},
+					},
+				},
+			},
+			expectedBackends: map[string]*types.Backend{
+				"backend-test": {
+					Servers: map[string]types.Server{
+						"server-test-842895ca2aca17f6ee36ddb2f621194d": {
+							URL:    "http://127.0.0.1:80",
+							Weight: label.DefaultWeight,
+						},
+					},
+				},
+			},
+			networks: map[string]*docker.NetworkResource{
+				"1": {
+					Name: "foo",
+				},
+			},
+		},
+		{
+			desc: "when frontend forward auth configuration",
+			services: []swarm.Service{
+				swarmService(
+					serviceName("test"),
+					serviceLabels(map[string]string{
+						label.TraefikPort:                                     "80",
+						label.TraefikFrontendAuthForwardAddress:               "auth.server",
+						label.TraefikFrontendAuthForwardTrustForwardHeader:    "true",
+						label.TraefikFrontendAuthForwardTLSCa:                 "ca.crt",
+						label.TraefikFrontendAuthForwardTLSCaOptional:         "true",
+						label.TraefikFrontendAuthForwardTLSCert:               "server.crt",
+						label.TraefikFrontendAuthForwardTLSKey:                "server.key",
+						label.TraefikFrontendAuthForwardTLSInsecureSkipVerify: "true",
+					}),
+					withEndpointSpec(modeVIP),
+					withEndpoint(virtualIP("1", "127.0.0.1/24")),
+				),
+			},
+			expectedFrontends: map[string]*types.Frontend{
+				"frontend-Host-test-docker-localhost-0": {
+					Backend:        "backend-test",
+					PassHostHeader: true,
+					EntryPoints:    []string{},
+					Auth: &types.Auth{
+						Forward: &types.Forward{
+							Address:            "auth.server",
+							TrustForwardHeader: true,
+							TLS: &types.ClientTLS{
+								CA:                 "ca.crt",
+								CAOptional:         true,
+								Cert:               "server.crt",
+								Key:                "server.key",
+								InsecureSkipVerify: true,
+							},
+						},
+					},
+					Routes: map[string]types.Route{
+						"route-frontend-Host-test-docker-localhost-0": {
+							Rule: "Host:test.docker.localhost",
+						},
+					},
+				},
+			},
+			expectedBackends: map[string]*types.Backend{
+				"backend-test": {
+					Servers: map[string]types.Server{
+						"server-test-842895ca2aca17f6ee36ddb2f621194d": {
+							URL:    "http://127.0.0.1:80",
+							Weight: label.DefaultWeight,
+						},
+					},
+				},
+			},
+			networks: map[string]*docker.NetworkResource{
+				"1": {
+					Name: "foo",
+				},
+			},
+		},
+		{
 			desc: "when all labels are set",
 			services: []swarm.Service{
 				swarmService(
@@ -107,11 +315,13 @@ func TestSwarmBuildConfiguration(t *testing.T) {
 						label.TraefikBackend: "foobar",
 
 						label.TraefikBackendCircuitBreakerExpression:         "NetworkErrorRatio() > 0.5",
+						label.TraefikBackendHealthCheckScheme:                "http",
 						label.TraefikBackendHealthCheckPath:                  "/health",
 						label.TraefikBackendHealthCheckPort:                  "880",
 						label.TraefikBackendHealthCheckInterval:              "6",
+						label.TraefikBackendHealthCheckHostname:              "foo.com",
+						label.TraefikBackendHealthCheckHeaders:               "Foo:bar || Bar:foo",
 						label.TraefikBackendLoadBalancerMethod:               "drr",
-						label.TraefikBackendLoadBalancerSticky:               "true",
 						label.TraefikBackendLoadBalancerStickiness:           "true",
 						label.TraefikBackendLoadBalancerStickinessCookieName: "chocolate",
 						label.TraefikBackendMaxConnAmount:                    "666",
@@ -122,16 +332,32 @@ func TestSwarmBuildConfiguration(t *testing.T) {
 						label.TraefikBackendBufferingMemRequestBodyBytes:     "2097152",
 						label.TraefikBackendBufferingRetryExpression:         "IsNetworkError() && Attempts() <= 2",
 
-						label.TraefikFrontendAuthBasic:            "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/,test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0",
-						label.TraefikFrontendEntryPoints:          "http,https",
-						label.TraefikFrontendPassHostHeader:       "true",
-						label.TraefikFrontendPassTLSCert:          "true",
-						label.TraefikFrontendPriority:             "666",
-						label.TraefikFrontendRedirectEntryPoint:   "https",
-						label.TraefikFrontendRedirectRegex:        "nope",
-						label.TraefikFrontendRedirectReplacement:  "nope",
-						label.TraefikFrontendRule:                 "Host:traefik.io",
-						label.TraefikFrontendWhitelistSourceRange: "10.10.10.10",
+						label.TraefikFrontendAuthBasicRemoveHeader:            "true",
+						label.TraefikFrontendAuthBasicUsers:                   "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/,test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0",
+						label.TraefikFrontendAuthBasicUsersFile:               ".htpasswd",
+						label.TraefikFrontendAuthDigestRemoveHeader:           "true",
+						label.TraefikFrontendAuthDigestUsers:                  "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/,test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0",
+						label.TraefikFrontendAuthDigestUsersFile:              ".htpasswd",
+						label.TraefikFrontendAuthForwardAddress:               "auth.server",
+						label.TraefikFrontendAuthForwardTrustForwardHeader:    "true",
+						label.TraefikFrontendAuthForwardTLSCa:                 "ca.crt",
+						label.TraefikFrontendAuthForwardTLSCaOptional:         "true",
+						label.TraefikFrontendAuthForwardTLSCert:               "server.crt",
+						label.TraefikFrontendAuthForwardTLSKey:                "server.key",
+						label.TraefikFrontendAuthForwardTLSInsecureSkipVerify: "true",
+						label.TraefikFrontendAuthHeaderField:                  "X-WebAuth-User",
+
+						label.TraefikFrontendAuthBasic:                 "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/,test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0",
+						label.TraefikFrontendEntryPoints:               "http,https",
+						label.TraefikFrontendPassHostHeader:            "true",
+						label.TraefikFrontendPassTLSCert:               "true",
+						label.TraefikFrontendPriority:                  "666",
+						label.TraefikFrontendRedirectEntryPoint:        "https",
+						label.TraefikFrontendRedirectRegex:             "nope",
+						label.TraefikFrontendRedirectReplacement:       "nope",
+						label.TraefikFrontendRule:                      "Host:traefik.io",
+						label.TraefikFrontendWhiteListSourceRange:      "10.10.10.10",
+						label.TraefikFrontendWhiteListUseXForwardedFor: "true",
 
 						label.TraefikFrontendRequestHeaders:          "Access-Control-Allow-Methods:POST,GET,OPTIONS || Content-type: application/json; charset=utf-8",
 						label.TraefikFrontendResponseHeaders:         "Access-Control-Allow-Methods:POST,GET,OPTIONS || Content-type: application/json; charset=utf-8",
@@ -143,7 +369,9 @@ func TestSwarmBuildConfiguration(t *testing.T) {
 						label.TraefikFrontendContentSecurityPolicy:   "foo",
 						label.TraefikFrontendPublicKey:               "foo",
 						label.TraefikFrontendReferrerPolicy:          "foo",
+						label.TraefikFrontendCustomBrowserXSSValue:   "foo",
 						label.TraefikFrontendSTSSeconds:              "666",
+						label.TraefikFrontendSSLForceHost:            "true",
 						label.TraefikFrontendSSLRedirect:             "true",
 						label.TraefikFrontendSSLTemporaryRedirect:    "true",
 						label.TraefikFrontendSTSIncludeSubdomains:    "true",
@@ -188,12 +416,18 @@ func TestSwarmBuildConfiguration(t *testing.T) {
 					PassHostHeader: true,
 					PassTLSCert:    true,
 					Priority:       666,
-					BasicAuth: []string{
-						"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
-						"test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0",
+					Auth: &types.Auth{
+						HeaderField: "X-WebAuth-User",
+						Basic: &types.Basic{
+							RemoveHeader: true,
+							Users: []string{"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
+								"test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0"},
+							UsersFile: ".htpasswd",
+						},
 					},
-					WhitelistSourceRange: []string{
-						"10.10.10.10",
+					WhiteList: &types.WhiteList{
+						SourceRange:      []string{"10.10.10.10"},
+						UseXForwardedFor: true,
 					},
 					Headers: &types.Headers{
 						CustomRequestHeaders: map[string]string{
@@ -216,6 +450,7 @@ func TestSwarmBuildConfiguration(t *testing.T) {
 						},
 						SSLRedirect:          true,
 						SSLTemporaryRedirect: true,
+						SSLForceHost:         true,
 						SSLHost:              "foo",
 						SSLProxyHeaders: map[string]string{
 							"Access-Control-Allow-Methods": "POST,GET,OPTIONS",
@@ -229,34 +464,34 @@ func TestSwarmBuildConfiguration(t *testing.T) {
 						CustomFrameOptionsValue: "foo",
 						ContentTypeNosniff:      true,
 						BrowserXSSFilter:        true,
+						CustomBrowserXSSValue:   "foo",
 						ContentSecurityPolicy:   "foo",
 						PublicKey:               "foo",
 						ReferrerPolicy:          "foo",
 						IsDevelopment:           true,
 					},
-
 					Errors: map[string]*types.ErrorPage{
 						"foo": {
 							Status:  []string{"404"},
 							Query:   "foo_query",
-							Backend: "foobar",
+							Backend: "backend-foobar",
 						},
 						"bar": {
 							Status:  []string{"500", "600"},
 							Query:   "bar_query",
-							Backend: "foobar",
+							Backend: "backend-foobar",
 						},
 					},
 					RateLimit: &types.RateLimit{
 						ExtractorFunc: "client.ip",
 						RateSet: map[string]*types.Rate{
 							"foo": {
-								Period:  flaeg.Duration(6 * time.Second),
+								Period:  parse.Duration(6 * time.Second),
 								Average: 12,
 								Burst:   18,
 							},
 							"bar": {
-								Period:  flaeg.Duration(3 * time.Second),
+								Period:  parse.Duration(3 * time.Second),
 								Average: 6,
 								Burst:   9,
 							},
@@ -272,7 +507,7 @@ func TestSwarmBuildConfiguration(t *testing.T) {
 			expectedBackends: map[string]*types.Backend{
 				"backend-foobar": {
 					Servers: map[string]types.Server{
-						"server-test1": {
+						"server-test1-7f6444e0dff3330c8b0ad2bbbd383b0f": {
 							URL:    "https://127.0.0.1:666",
 							Weight: 12,
 						},
@@ -282,7 +517,6 @@ func TestSwarmBuildConfiguration(t *testing.T) {
 					},
 					LoadBalancer: &types.LoadBalancer{
 						Method: "drr",
-						Sticky: true,
 						Stickiness: &types.Stickiness{
 							CookieName: "chocolate",
 						},
@@ -292,9 +526,15 @@ func TestSwarmBuildConfiguration(t *testing.T) {
 						ExtractorFunc: "client.ip",
 					},
 					HealthCheck: &types.HealthCheck{
+						Scheme:   "http",
 						Path:     "/health",
 						Port:     880,
 						Interval: "6",
+						Hostname: "foo.com",
+						Headers: map[string]string{
+							"Foo": "bar",
+							"Bar": "foo",
+						},
 					},
 					Buffering: &types.Buffering{
 						MaxResponseBodyBytes: 10485760,
@@ -463,51 +703,12 @@ func TestSwarmTraefikFilter(t *testing.T) {
 		test := test
 		t.Run(strconv.Itoa(serviceID), func(t *testing.T) {
 			t.Parallel()
+
 			dData := parseService(test.service, test.networks)
+
 			actual := test.provider.containerFilter(dData)
 			if actual != test.expected {
 				t.Errorf("expected %v for %+v, got %+v", test.expected, test, actual)
-			}
-		})
-	}
-}
-
-func TestSwarmGetFuncStringLabel(t *testing.T) {
-	testCases := []struct {
-		service      swarm.Service
-		labelName    string
-		defaultValue string
-		networks     map[string]*docker.NetworkResource
-		expected     string
-	}{
-		{
-			service:      swarmService(),
-			labelName:    label.TraefikWeight,
-			defaultValue: label.DefaultWeight,
-			networks:     map[string]*docker.NetworkResource{},
-			expected:     "0",
-		},
-		{
-			service: swarmService(serviceLabels(map[string]string{
-				label.TraefikWeight: "10",
-			})),
-			labelName:    label.TraefikWeight,
-			defaultValue: label.DefaultWeight,
-			networks:     map[string]*docker.NetworkResource{},
-			expected:     "10",
-		},
-	}
-
-	for serviceID, test := range testCases {
-		test := test
-		t.Run(test.labelName+strconv.Itoa(serviceID), func(t *testing.T) {
-			t.Parallel()
-
-			dData := parseService(test.service, test.networks)
-
-			actual := getFuncStringLabel(test.labelName, test.defaultValue)(dData)
-			if actual != test.expected {
-				t.Errorf("got %q, expected %q", actual, test.expected)
 			}
 		})
 	}
@@ -561,15 +762,18 @@ func TestSwarmGetFrontendName(t *testing.T) {
 		test := test
 		t.Run(strconv.Itoa(serviceID), func(t *testing.T) {
 			t.Parallel()
+
 			dData := parseService(test.service, test.networks)
+			segmentProperties := label.ExtractTraefikLabels(dData.Labels)
+			dData.SegmentLabels = segmentProperties[""]
+
 			provider := &Provider{
 				Domain:    "docker.localhost",
 				SwarmMode: true,
 			}
+
 			actual := provider.getFrontendName(dData, 0)
-			if actual != test.expected {
-				t.Errorf("expected %q, got %q", test.expected, actual)
-			}
+			assert.Equal(t, test.expected, actual)
 		})
 	}
 }
@@ -586,8 +790,11 @@ func TestSwarmGetFrontendRule(t *testing.T) {
 			networks: map[string]*docker.NetworkResource{},
 		},
 		{
-			service:  swarmService(serviceName("bar")),
-			expected: "Host:bar.docker.localhost",
+			service: swarmService(serviceName("foo"),
+				serviceLabels(map[string]string{
+					label.TraefikDomain: "traefik.localhost",
+				})),
+			expected: "Host:foo.traefik.localhost",
 			networks: map[string]*docker.NetworkResource{},
 		},
 		{
@@ -610,15 +817,17 @@ func TestSwarmGetFrontendRule(t *testing.T) {
 		test := test
 		t.Run(strconv.Itoa(serviceID), func(t *testing.T) {
 			t.Parallel()
+
 			dData := parseService(test.service, test.networks)
+			segmentProperties := label.ExtractTraefikLabels(dData.Labels)
+
 			provider := &Provider{
 				Domain:    "docker.localhost",
 				SwarmMode: true,
 			}
-			actual := provider.getFrontendRule(dData)
-			if actual != test.expected {
-				t.Errorf("expected %q, got %q", test.expected, actual)
-			}
+
+			actual := provider.getFrontendRule(dData, segmentProperties[""])
+			assert.Equal(t, test.expected, actual)
 		})
 	}
 }
@@ -652,11 +861,13 @@ func TestSwarmGetBackendName(t *testing.T) {
 		test := test
 		t.Run(strconv.Itoa(serviceID), func(t *testing.T) {
 			t.Parallel()
+
 			dData := parseService(test.service, test.networks)
+			segmentProperties := label.ExtractTraefikLabels(dData.Labels)
+			dData.SegmentLabels = segmentProperties[""]
+
 			actual := getBackendName(dData)
-			if actual != test.expected {
-				t.Errorf("expected %q, got %q", test.expected, actual)
-			}
+			assert.Equal(t, test.expected, actual)
 		})
 	}
 }
@@ -711,14 +922,17 @@ func TestSwarmGetIPAddress(t *testing.T) {
 		test := test
 		t.Run(strconv.Itoa(serviceID), func(t *testing.T) {
 			t.Parallel()
-			dData := parseService(test.service, test.networks)
+
 			provider := &Provider{
 				SwarmMode: true,
 			}
-			actual := provider.getIPAddress(dData)
-			if actual != test.expected {
-				t.Errorf("expected %q, got %q", test.expected, actual)
-			}
+
+			dData := parseService(test.service, test.networks)
+			segmentProperties := label.ExtractTraefikLabels(dData.Labels)
+			dData.SegmentLabels = segmentProperties[""]
+
+			actual := provider.getDeprecatedIPAddress(dData)
+			assert.Equal(t, test.expected, actual)
 		})
 	}
 }
@@ -745,11 +959,13 @@ func TestSwarmGetPort(t *testing.T) {
 		test := test
 		t.Run(strconv.Itoa(serviceID), func(t *testing.T) {
 			t.Parallel()
+
 			dData := parseService(test.service, test.networks)
+			segmentProperties := label.ExtractTraefikLabels(dData.Labels)
+			dData.SegmentLabels = segmentProperties[""]
+
 			actual := getPort(dData)
-			if actual != test.expected {
-				t.Errorf("expected %q, got %q", test.expected, actual)
-			}
+			assert.Equal(t, test.expected, actual)
 		})
 	}
 }

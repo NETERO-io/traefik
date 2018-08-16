@@ -21,6 +21,8 @@ func Test_parseEntryPointsConfiguration(t *testing.T) {
 				"Address::8000 " +
 				"TLS:goo,gii " +
 				"TLS " +
+				"TLS.MinVersion:VersionTLS11 " +
+				"TLS.CipherSuites:TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA384,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA " +
 				"CA:car " +
 				"CA.Optional:true " +
 				"Redirect.EntryPoint:https " +
@@ -28,24 +30,32 @@ func Test_parseEntryPointsConfiguration(t *testing.T) {
 				"Redirect.Replacement:http://mydomain/$1 " +
 				"Redirect.Permanent:true " +
 				"Compress:true " +
-				"WhiteListSourceRange:10.42.0.0/16,152.89.1.33/32,afed:be44::/16 " +
 				"ProxyProtocol.TrustedIPs:192.168.0.1 " +
 				"ForwardedHeaders.TrustedIPs:10.0.0.3/24,20.0.0.3/24 " +
 				"Auth.Basic.Users:test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/,test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0 " +
+				"Auth.Basic.RemoveHeader:true " +
 				"Auth.Digest.Users:test:traefik:a2688e031edb4be6a3797f3882655c05,test2:traefik:518845800f9e2bfb1f1f740ec24f074e " +
+				"Auth.Digest.RemoveHeader:true " +
 				"Auth.HeaderField:X-WebAuth-User " +
 				"Auth.Forward.Address:https://authserver.com/auth " +
+				"Auth.Forward.AuthResponseHeaders:X-Auth,X-Test,X-Secret " +
 				"Auth.Forward.TrustForwardHeader:true " +
 				"Auth.Forward.TLS.CA:path/to/local.crt " +
 				"Auth.Forward.TLS.CAOptional:true " +
 				"Auth.Forward.TLS.Cert:path/to/foo.cert " +
 				"Auth.Forward.TLS.Key:path/to/foo.key " +
-				"Auth.Forward.TLS.InsecureSkipVerify:true ",
+				"Auth.Forward.TLS.InsecureSkipVerify:true " +
+				"WhiteListSourceRange:10.42.0.0/16,152.89.1.33/32,afed:be44::/16 " +
+				"whiteList.sourceRange:10.42.0.0/16,152.89.1.33/32,afed:be44::/16 " +
+				"whiteList.useXForwardedFor:true ",
 			expectedResult: map[string]string{
 				"address":                             ":8000",
 				"auth_basic_users":                    "test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/,test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0",
+				"auth_basic_removeheader":             "true",
 				"auth_digest_users":                   "test:traefik:a2688e031edb4be6a3797f3882655c05,test2:traefik:518845800f9e2bfb1f1f740ec24f074e",
+				"auth_digest_removeheader":            "true",
 				"auth_forward_address":                "https://authserver.com/auth",
+				"auth_forward_authresponseheaders":    "X-Auth,X-Test,X-Secret",
 				"auth_forward_tls_ca":                 "path/to/local.crt",
 				"auth_forward_tls_caoptional":         "true",
 				"auth_forward_tls_cert":               "path/to/foo.cert",
@@ -63,9 +73,13 @@ func Test_parseEntryPointsConfiguration(t *testing.T) {
 				"redirect_permanent":       "true",
 				"redirect_regex":           "http://localhost/(.*)",
 				"redirect_replacement":     "http://mydomain/$1",
-				"tls":                  "goo,gii",
-				"tls_acme":             "TLS",
-				"whitelistsourcerange": "10.42.0.0/16,152.89.1.33/32,afed:be44::/16",
+				"tls":                        "goo,gii",
+				"tls_acme":                   "TLS",
+				"tls_ciphersuites":           "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA384,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+				"tls_minversion":             "VersionTLS11",
+				"whitelistsourcerange":       "10.42.0.0/16,152.89.1.33/32,afed:be44::/16",
+				"whitelist_sourcerange":      "10.42.0.0/16,152.89.1.33/32,afed:be44::/16",
+				"whitelist_usexforwardedfor": "true",
 			},
 		},
 		{
@@ -166,8 +180,10 @@ func TestEntryPoints_Set(t *testing.T) {
 			name: "all parameters camelcase",
 			expression: "Name:foo " +
 				"Address::8000 " +
-				"TLS:goo,gii " +
+				"TLS:goo,gii;foo,fii " +
 				"TLS " +
+				"TLS.MinVersion:VersionTLS11 " +
+				"TLS.CipherSuites:TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA384,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA " +
 				"CA:car " +
 				"CA.Optional:true " +
 				"Redirect.EntryPoint:https " +
@@ -175,27 +191,38 @@ func TestEntryPoints_Set(t *testing.T) {
 				"Redirect.Replacement:http://mydomain/$1 " +
 				"Redirect.Permanent:true " +
 				"Compress:true " +
-				"WhiteListSourceRange:10.42.0.0/16,152.89.1.33/32,afed:be44::/16 " +
 				"ProxyProtocol.TrustedIPs:192.168.0.1 " +
 				"ForwardedHeaders.TrustedIPs:10.0.0.3/24,20.0.0.3/24 " +
 				"Auth.Basic.Users:test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/,test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0 " +
+				"Auth.Basic.RemoveHeader:true " +
 				"Auth.Digest.Users:test:traefik:a2688e031edb4be6a3797f3882655c05,test2:traefik:518845800f9e2bfb1f1f740ec24f074e " +
+				"Auth.Digest.RemoveHeader:true " +
 				"Auth.HeaderField:X-WebAuth-User " +
 				"Auth.Forward.Address:https://authserver.com/auth " +
+				"Auth.Forward.AuthResponseHeaders:X-Auth,X-Test,X-Secret " +
 				"Auth.Forward.TrustForwardHeader:true " +
 				"Auth.Forward.TLS.CA:path/to/local.crt " +
 				"Auth.Forward.TLS.CAOptional:true " +
 				"Auth.Forward.TLS.Cert:path/to/foo.cert " +
 				"Auth.Forward.TLS.Key:path/to/foo.key " +
-				"Auth.Forward.TLS.InsecureSkipVerify:true ",
+				"Auth.Forward.TLS.InsecureSkipVerify:true " +
+				"WhiteListSourceRange:10.42.0.0/16,152.89.1.33/32,afed:be44::/16 " +
+				"whiteList.sourceRange:10.42.0.0/16,152.89.1.33/32,afed:be44::/16 " +
+				"whiteList.useXForwardedFor:true ",
 			expectedEntryPointName: "foo",
 			expectedEntryPoint: &EntryPoint{
 				Address: ":8000",
 				TLS: &tls.TLS{
+					MinVersion:   "VersionTLS11",
+					CipherSuites: []string{"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA384", "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305", "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"},
 					Certificates: tls.Certificates{
 						{
 							CertFile: tls.FileOrContent("goo"),
 							KeyFile:  tls.FileOrContent("gii"),
+						},
+						{
+							CertFile: tls.FileOrContent("foo"),
+							KeyFile:  tls.FileOrContent("fii"),
 						},
 					},
 					ClientCA: tls.ClientCA{
@@ -211,19 +238,22 @@ func TestEntryPoints_Set(t *testing.T) {
 				},
 				Auth: &types.Auth{
 					Basic: &types.Basic{
+						RemoveHeader: true,
 						Users: types.Users{
 							"test:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
 							"test2:$apr1$d9hr9HBB$4HxwgUir3HP4EsggP/QNo0",
 						},
 					},
 					Digest: &types.Digest{
+						RemoveHeader: true,
 						Users: types.Users{
 							"test:traefik:a2688e031edb4be6a3797f3882655c05",
 							"test2:traefik:518845800f9e2bfb1f1f740ec24f074e",
 						},
 					},
 					Forward: &types.Forward{
-						Address: "https://authserver.com/auth",
+						Address:             "https://authserver.com/auth",
+						AuthResponseHeaders: []string{"X-Auth", "X-Test", "X-Secret"},
 						TLS: &types.ClientTLS{
 							CA:                 "path/to/local.crt",
 							CAOptional:         true,
@@ -240,7 +270,15 @@ func TestEntryPoints_Set(t *testing.T) {
 					"152.89.1.33/32",
 					"afed:be44::/16",
 				},
-				Compress: true,
+				WhiteList: &types.WhiteList{
+					SourceRange: []string{
+						"10.42.0.0/16",
+						"152.89.1.33/32",
+						"afed:be44::/16",
+					},
+					UseXForwardedFor: true,
+				},
+				Compress: &Compress{},
 				ProxyProtocol: &ProxyProtocol{
 					Insecure:   false,
 					TrustedIPs: []string{"192.168.0.1"},
@@ -258,8 +296,10 @@ func TestEntryPoints_Set(t *testing.T) {
 			name: "all parameters lowercase",
 			expression: "Name:foo " +
 				"address::8000 " +
-				"tls:goo,gii " +
+				"tls:goo,gii;foo,fii " +
 				"tls " +
+				"tls.minversion:VersionTLS11 " +
+				"tls.ciphersuites:TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA384,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA " +
 				"ca:car " +
 				"ca.Optional:true " +
 				"redirect.entryPoint:https " +
@@ -274,6 +314,7 @@ func TestEntryPoints_Set(t *testing.T) {
 				"auth.digest.users:test:traefik:a2688e031edb4be6a3797f3882655c05,test2:traefik:518845800f9e2bfb1f1f740ec24f074e " +
 				"auth.headerField:X-WebAuth-User " +
 				"auth.forward.address:https://authserver.com/auth " +
+				"auth.forward.authResponseHeaders:X-Auth,X-Test,X-Secret " +
 				"auth.forward.trustForwardHeader:true " +
 				"auth.forward.tls.ca:path/to/local.crt " +
 				"auth.forward.tls.caOptional:true " +
@@ -284,10 +325,16 @@ func TestEntryPoints_Set(t *testing.T) {
 			expectedEntryPoint: &EntryPoint{
 				Address: ":8000",
 				TLS: &tls.TLS{
+					MinVersion:   "VersionTLS11",
+					CipherSuites: []string{"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA384", "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305", "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"},
 					Certificates: tls.Certificates{
 						{
 							CertFile: tls.FileOrContent("goo"),
 							KeyFile:  tls.FileOrContent("gii"),
+						},
+						{
+							CertFile: tls.FileOrContent("foo"),
+							KeyFile:  tls.FileOrContent("fii"),
 						},
 					},
 					ClientCA: tls.ClientCA{
@@ -315,7 +362,8 @@ func TestEntryPoints_Set(t *testing.T) {
 						},
 					},
 					Forward: &types.Forward{
-						Address: "https://authserver.com/auth",
+						Address:             "https://authserver.com/auth",
+						AuthResponseHeaders: []string{"X-Auth", "X-Test", "X-Secret"},
 						TLS: &types.ClientTLS{
 							CA:                 "path/to/local.crt",
 							CAOptional:         true,
@@ -332,7 +380,7 @@ func TestEntryPoints_Set(t *testing.T) {
 					"152.89.1.33/32",
 					"afed:be44::/16",
 				},
-				Compress: true,
+				Compress: &Compress{},
 				ProxyProtocol: &ProxyProtocol{
 					Insecure:   false,
 					TrustedIPs: []string{"192.168.0.1"},
@@ -414,7 +462,7 @@ func TestEntryPoints_Set(t *testing.T) {
 			expression:             "Name:foo Compress:on",
 			expectedEntryPointName: "foo",
 			expectedEntryPoint: &EntryPoint{
-				Compress:         true,
+				Compress:         &Compress{},
 				ForwardedHeaders: &ForwardedHeaders{Insecure: true},
 			},
 		},
@@ -423,7 +471,7 @@ func TestEntryPoints_Set(t *testing.T) {
 			expression:             "Name:foo Compress:true",
 			expectedEntryPointName: "foo",
 			expectedEntryPoint: &EntryPoint{
-				Compress:         true,
+				Compress:         &Compress{},
 				ForwardedHeaders: &ForwardedHeaders{Insecure: true},
 			},
 		},

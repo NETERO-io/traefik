@@ -3,10 +3,11 @@ package marathon
 import (
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/cenk/backoff"
-	"github.com/containous/flaeg"
+	"github.com/containous/flaeg/parse"
 	"github.com/containous/traefik/job"
 	"github.com/containous/traefik/log"
 	"github.com/containous/traefik/provider"
@@ -54,8 +55,10 @@ type Provider struct {
 	MarathonLBCompatibility   bool             `description:"Add compatibility with marathon-lb labels" export:"true"`
 	FilterMarathonConstraints bool             `description:"Enable use of Marathon constraints in constraint filtering" export:"true"`
 	TLS                       *types.ClientTLS `description:"Enable TLS support" export:"true"`
-	DialerTimeout             flaeg.Duration   `description:"Set a non-default connection timeout for Marathon" export:"true"`
-	KeepAlive                 flaeg.Duration   `description:"Set a non-default TCP Keep Alive time in seconds" export:"true"`
+	DialerTimeout             parse.Duration   `description:"Set a dialer timeout for Marathon" export:"true"`
+	ResponseHeaderTimeout     parse.Duration   `description:"Set a response header timeout for Marathon" export:"true"`
+	TLSHandshakeTimeout       parse.Duration   `description:"Set a TLS handhsake timeout for Marathon" export:"true"`
+	KeepAlive                 parse.Duration   `description:"Set a TCP Keep Alive time in seconds" export:"true"`
 	ForceTaskHostname         bool             `description:"Force to use the task's hostname." export:"true"`
 	Basic                     *Basic           `description:"Enable basic authentication" export:"true"`
 	RespectReadinessChecks    bool             `description:"Filter out tasks with non-successful readiness checks during deployments" export:"true"`
@@ -69,10 +72,14 @@ type Basic struct {
 	HTTPBasicPassword string `description:"Basic authentication Password"`
 }
 
+// Init the provider
+func (p *Provider) Init(constraints types.Constraints) error {
+	return p.BaseProvider.Init(constraints)
+}
+
 // Provide allows the marathon provider to provide configurations to traefik
 // using the given configuration channel.
-func (p *Provider) Provide(configurationChan chan<- types.ConfigMessage, pool *safe.Pool, constraints types.Constraints) error {
-	p.Constraints = append(p.Constraints, constraints...)
+func (p *Provider) Provide(configurationChan chan<- types.ConfigMessage, pool *safe.Pool) error {
 	operation := func() error {
 		config := marathon.NewDefaultConfig()
 		config.URL = p.Endpoint
@@ -104,7 +111,9 @@ func (p *Provider) Provide(configurationChan chan<- types.ConfigMessage, pool *s
 					KeepAlive: time.Duration(p.KeepAlive),
 					Timeout:   time.Duration(p.DialerTimeout),
 				}).DialContext,
-				TLSClientConfig: TLSConfig,
+				ResponseHeaderTimeout: time.Duration(p.ResponseHeaderTimeout),
+				TLSHandshakeTimeout:   time.Duration(p.TLSHandshakeTimeout),
+				TLSClientConfig:       TLSConfig,
 			},
 		}
 		client, err := marathon.NewClient(config)
@@ -128,7 +137,8 @@ func (p *Provider) Provide(configurationChan chan<- types.ConfigMessage, pool *s
 						return
 					case event := <-update:
 						log.Debugf("Received provider event %s", event)
-						configuration := p.buildConfiguration()
+
+						configuration := p.getConfiguration()
 						if configuration != nil {
 							configurationChan <- types.ConfigMessage{
 								ProviderName:  "marathon",
@@ -139,7 +149,8 @@ func (p *Provider) Provide(configurationChan chan<- types.ConfigMessage, pool *s
 				}
 			})
 		}
-		configuration := p.buildConfiguration()
+
+		configuration := p.getConfiguration()
 		configurationChan <- types.ConfigMessage{
 			ProviderName:  "marathon",
 			Configuration: configuration,
@@ -155,4 +166,23 @@ func (p *Provider) Provide(configurationChan chan<- types.ConfigMessage, pool *s
 		log.Errorf("Cannot connect to Provider server %+v", err)
 	}
 	return nil
+}
+
+func (p *Provider) getConfiguration() *types.Configuration {
+	applications, err := p.getApplications()
+	if err != nil {
+		log.Errorf("Failed to retrieve Marathon applications: %v", err)
+		return nil
+	}
+
+	return p.buildConfiguration(applications)
+}
+
+func (p *Provider) getApplications() (*marathon.Applications, error) {
+	v := url.Values{}
+	v.Add("embed", "apps.tasks")
+	v.Add("embed", "apps.deployments")
+	v.Add("embed", "apps.readiness")
+
+	return p.marathonClient.Applications(v)
 }

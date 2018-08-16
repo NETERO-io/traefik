@@ -11,7 +11,7 @@ import (
 
 	"github.com/BurntSushi/ty/fun"
 	"github.com/abronan/valkeyrie/store"
-	"github.com/containous/flaeg"
+	"github.com/containous/flaeg/parse"
 	"github.com/containous/traefik/log"
 	"github.com/containous/traefik/provider/label"
 	"github.com/containous/traefik/tls"
@@ -41,29 +41,26 @@ func (p *Provider) buildConfiguration() *types.Configuration {
 		"getTLSSection": p.getTLSSection,
 
 		// Frontend functions
-		"getBackendName":          p.getFuncString(pathFrontendBackend, ""),
-		"getPriority":             p.getFuncInt(pathFrontendPriority, 0),
-		"getPassHostHeader":       p.getFuncBool(pathFrontendPassHostHeader, true),
-		"getPassTLSCert":          p.getFuncBool(pathFrontendPassTLSCert, label.DefaultPassTLSCert),
-		"getEntryPoints":          p.getFuncList(pathFrontendEntryPoints),
-		"getWhitelistSourceRange": p.getFuncList(pathFrontendWhiteListSourceRange),
-		"getBasicAuth":            p.getFuncList(pathFrontendBasicAuth),
-		"getRoutes":               p.getRoutes,
-		"getRedirect":             p.getRedirect,
-		"getErrorPages":           p.getErrorPages,
-		"getRateLimit":            p.getRateLimit,
-		"getHeaders":              p.getHeaders,
+		"getBackendName":    p.getFuncString(pathFrontendBackend, ""),
+		"getPriority":       p.getFuncInt(pathFrontendPriority, label.DefaultFrontendPriority),
+		"getPassHostHeader": p.getFuncBool(pathFrontendPassHostHeader, label.DefaultPassHostHeader),
+		"getPassTLSCert":    p.getFuncBool(pathFrontendPassTLSCert, label.DefaultPassTLSCert),
+		"getEntryPoints":    p.getFuncList(pathFrontendEntryPoints),
+		"getAuth":           p.getAuth,
+		"getRoutes":         p.getRoutes,
+		"getRedirect":       p.getRedirect,
+		"getErrorPages":     p.getErrorPages,
+		"getRateLimit":      p.getRateLimit,
+		"getHeaders":        p.getHeaders,
+		"getWhiteList":      p.getWhiteList,
 
 		// Backend functions
-		"getServers":              p.getServers,
-		"getCircuitBreaker":       p.getCircuitBreaker,
-		"getLoadBalancer":         p.getLoadBalancer,
-		"getMaxConn":              p.getMaxConn,
-		"getHealthCheck":          p.getHealthCheck,
-		"getBuffering":            p.getBuffering,
-		"getSticky":               p.getSticky,               // Deprecated [breaking]
-		"hasStickinessLabel":      p.hasStickinessLabel,      // Deprecated [breaking]
-		"getStickinessCookieName": p.getStickinessCookieName, // Deprecated [breaking]
+		"getServers":        p.getServers,
+		"getCircuitBreaker": p.getCircuitBreaker,
+		"getLoadBalancer":   p.getLoadBalancer,
+		"getMaxConn":        p.getMaxConn,
+		"getHealthCheck":    p.getHealthCheck,
+		"getBuffering":      p.getBuffering,
 	}
 
 	configuration, err := p.GetConfiguration("templates/kv.tmpl", KvFuncMap, templateObjects)
@@ -80,31 +77,17 @@ func (p *Provider) buildConfiguration() *types.Configuration {
 	return configuration
 }
 
-// Deprecated
-func (p *Provider) getSticky(rootPath string) bool {
-	stickyValue := p.get("", rootPath, pathBackendLoadBalancerSticky)
-	if len(stickyValue) > 0 {
-		log.Warnf("Deprecated configuration found: %s. Please use %s.", pathBackendLoadBalancerSticky, pathBackendLoadBalancerStickiness)
-	} else {
-		return false
+func (p *Provider) getWhiteList(rootPath string) *types.WhiteList {
+	ranges := p.getList(rootPath, pathFrontendWhiteListSourceRange)
+
+	if len(ranges) > 0 {
+		return &types.WhiteList{
+			SourceRange:      ranges,
+			UseXForwardedFor: p.getBool(false, rootPath, pathFrontendWhiteListUseXForwardedFor),
+		}
 	}
 
-	sticky, err := strconv.ParseBool(stickyValue)
-	if err != nil {
-		log.Warnf("Invalid %s value: %s.", pathBackendLoadBalancerSticky, stickyValue)
-	}
-
-	return sticky
-}
-
-// Deprecated
-func (p *Provider) hasStickinessLabel(rootPath string) bool {
-	return p.getBool(false, rootPath, pathBackendLoadBalancerStickiness)
-}
-
-// Deprecated
-func (p *Provider) getStickinessCookieName(rootPath string) string {
-	return p.get("", rootPath, pathBackendLoadBalancerStickinessCookieName)
+	return nil
 }
 
 func (p *Provider) getRedirect(rootPath string) *types.Redirect {
@@ -166,7 +149,7 @@ func (p *Provider) getRateLimit(rootPath string) *types.RateLimit {
 
 		rawPeriod := p.get("", pathLimits+pathFrontendRateLimitPeriod)
 
-		var period flaeg.Duration
+		var period parse.Duration
 		err := period.Set(rawPeriod)
 		if err != nil {
 			log.Errorf("Invalid %q value: %q", pathLimits+pathFrontendRateLimitPeriod, rawPeriod)
@@ -195,6 +178,7 @@ func (p *Provider) getHeaders(rootPath string) *types.Headers {
 		SSLProxyHeaders:         p.getMap(rootPath, pathFrontendSSLProxyHeaders),
 		AllowedHosts:            p.getList("", rootPath, pathFrontendAllowedHosts),
 		HostsProxyHeaders:       p.getList(rootPath, pathFrontendHostsProxyHeaders),
+		SSLForceHost:            p.getBool(false, rootPath, pathFrontendSSLForceHost),
 		SSLRedirect:             p.getBool(false, rootPath, pathFrontendSSLRedirect),
 		SSLTemporaryRedirect:    p.getBool(false, rootPath, pathFrontendSSLTemporaryRedirect),
 		SSLHost:                 p.get("", rootPath, pathFrontendSSLHost),
@@ -206,6 +190,7 @@ func (p *Provider) getHeaders(rootPath string) *types.Headers {
 		CustomFrameOptionsValue: p.get("", rootPath, pathFrontendCustomFrameOptionsValue),
 		ContentTypeNosniff:      p.getBool(false, rootPath, pathFrontendContentTypeNosniff),
 		BrowserXSSFilter:        p.getBool(false, rootPath, pathFrontendBrowserXSSFilter),
+		CustomBrowserXSSValue:   p.get("", rootPath, pathFrontendCustomBrowserXSSValue),
 		ContentSecurityPolicy:   p.get("", rootPath, pathFrontendContentSecurityPolicy),
 		PublicKey:               p.get("", rootPath, pathFrontendPublicKey),
 		ReferrerPolicy:          p.get("", rootPath, pathFrontendReferrerPolicy),
@@ -222,7 +207,6 @@ func (p *Provider) getHeaders(rootPath string) *types.Headers {
 func (p *Provider) getLoadBalancer(rootPath string) *types.LoadBalancer {
 	lb := &types.LoadBalancer{
 		Method: p.get(label.DefaultBackendLoadBalancerMethod, rootPath, pathBackendLoadBalancerMethod),
-		Sticky: p.getSticky(rootPath),
 	}
 
 	if p.getBool(false, rootPath, pathBackendLoadBalancerStickiness) {
@@ -268,13 +252,19 @@ func (p *Provider) getHealthCheck(rootPath string) *types.HealthCheck {
 		return nil
 	}
 
+	scheme := p.get("", rootPath, pathBackendHealthCheckScheme)
 	port := p.getInt(label.DefaultBackendHealthCheckPort, rootPath, pathBackendHealthCheckPort)
 	interval := p.get("30s", rootPath, pathBackendHealthCheckInterval)
+	hostname := p.get("", rootPath, pathBackendHealthCheckHostname)
+	headers := p.getMap(rootPath, pathBackendHealthCheckHeaders)
 
 	return &types.HealthCheck{
+		Scheme:   scheme,
 		Path:     path,
 		Port:     port,
 		Interval: interval,
+		Hostname: hostname,
+		Headers:  headers,
 	}
 }
 
@@ -329,6 +319,65 @@ func (p *Provider) getTLSSection(prefix string) []*tls.Configuration {
 	return tlsSection
 }
 
+// GetAuth Create auth from path
+func (p *Provider) getAuth(rootPath string) *types.Auth {
+	if p.hasPrefix(rootPath, pathFrontendAuth) {
+		auth := &types.Auth{
+			HeaderField: p.get("", rootPath, pathFrontendAuthHeaderField),
+		}
+
+		if p.hasPrefix(rootPath, pathFrontendAuthBasic) {
+			auth.Basic = p.getAuthBasic(rootPath)
+		} else if p.hasPrefix(rootPath, pathFrontendAuthDigest) {
+			auth.Digest = p.getAuthDigest(rootPath)
+		} else if p.hasPrefix(rootPath, pathFrontendAuthForward) {
+			auth.Forward = p.getAuthForward(rootPath)
+		}
+
+		return auth
+	}
+	return nil
+}
+
+// getAuthBasic Create Basic Auth from path
+func (p *Provider) getAuthBasic(rootPath string) *types.Basic {
+	return &types.Basic{
+		UsersFile:    p.get("", rootPath, pathFrontendAuthBasicUsersFile),
+		RemoveHeader: p.getBool(false, rootPath, pathFrontendAuthBasicRemoveHeader),
+		Users:        p.getList(rootPath, pathFrontendAuthBasicUsers),
+	}
+}
+
+// getAuthDigest Create Digest Auth from path
+func (p *Provider) getAuthDigest(rootPath string) *types.Digest {
+	return &types.Digest{
+		Users:        p.getList(rootPath, pathFrontendAuthDigestUsers),
+		UsersFile:    p.get("", rootPath, pathFrontendAuthDigestUsersFile),
+		RemoveHeader: p.getBool(false, rootPath, pathFrontendAuthDigestRemoveHeader),
+	}
+}
+
+// getAuthForward Create Forward Auth from path
+func (p *Provider) getAuthForward(rootPath string) *types.Forward {
+	forwardAuth := &types.Forward{
+		Address:            p.get("", rootPath, pathFrontendAuthForwardAddress),
+		TrustForwardHeader: p.getBool(false, rootPath, pathFrontendAuthForwardTrustForwardHeader),
+	}
+
+	// TLS configuration
+	if len(p.getList(rootPath, pathFrontendAuthForwardTLS)) > 0 {
+		forwardAuth.TLS = &types.ClientTLS{
+			CA:                 p.get("", rootPath, pathFrontendAuthForwardTLSCa),
+			CAOptional:         p.getBool(false, rootPath, pathFrontendAuthForwardTLSCaOptional),
+			Cert:               p.get("", rootPath, pathFrontendAuthForwardTLSCert),
+			InsecureSkipVerify: p.getBool(false, rootPath, pathFrontendAuthForwardTLSInsecureSkipVerify),
+			Key:                p.get("", rootPath, pathFrontendAuthForwardTLSKey),
+		}
+	}
+
+	return forwardAuth
+}
+
 func (p *Provider) getRoutes(rootPath string) map[string]types.Route {
 	var routes map[string]types.Route
 
@@ -370,7 +419,7 @@ func (p *Provider) getServers(rootPath string) map[string]types.Server {
 		serverName := p.last(serverKey)
 		servers[serverName] = types.Server{
 			URL:    serverURL,
-			Weight: p.getInt(0, serverKey, pathBackendServerWeight),
+			Weight: p.getInt(label.DefaultWeight, serverKey, pathBackendServerWeight),
 		}
 	}
 
@@ -474,6 +523,21 @@ func (p *Provider) getBool(defaultValue bool, keyParts ...string) bool {
 func (p *Provider) has(keyParts ...string) bool {
 	value := p.get("", keyParts...)
 	return len(value) > 0
+}
+
+func (p *Provider) hasPrefix(keyParts ...string) bool {
+	baseKey := strings.Join(keyParts, "")
+	if !strings.HasSuffix(baseKey, "/") {
+		baseKey += "/"
+	}
+
+	listKeys, err := p.kvClient.List(baseKey, nil)
+	if err != nil {
+		log.Debugf("Cannot list keys under %q: %v", baseKey, err)
+		return false
+	}
+
+	return len(listKeys) > 0
 }
 
 func (p *Provider) getInt(defaultValue int, keyParts ...string) int {

@@ -2,41 +2,48 @@
 {{range $service := .Services}}
   {{ $backendName := getServiceBackendName $service }}
 
-  {{ $circuitBreaker := getCircuitBreaker $service.Attributes }}
+  {{ $circuitBreaker := getCircuitBreaker $service.TraefikLabels }}
   {{if $circuitBreaker }}
   [backends."backend-{{ $backendName }}".circuitBreaker]
     expression = "{{ $circuitBreaker.Expression }}"
   {{end}}
 
-  {{ $loadBalancer := getLoadBalancer $service.Attributes }}
+  {{ $loadBalancer := getLoadBalancer $service.TraefikLabels }}
   {{if $loadBalancer }}
   [backends."backend-{{ $backendName }}".loadBalancer]
     method = "{{ $loadBalancer.Method }}"
-    sticky = {{ $loadBalancer.Sticky }}
     {{if $loadBalancer.Stickiness }}
     [backends."backend-{{ $backendName }}".loadBalancer.stickiness]
       cookieName = "{{ $loadBalancer.Stickiness.CookieName }}"
     {{end}}
   {{end}}
 
-  {{ $maxConn := getMaxConn $service.Attributes }}
+  {{ $maxConn := getMaxConn $service.TraefikLabels }}
   {{if $maxConn }}
   [backends."backend-{{ $backendName }}".maxConn]
     extractorFunc = "{{ $maxConn.ExtractorFunc }}"
     amount = {{ $maxConn.Amount }}
   {{end}}
 
-  {{ $healthCheck := getHealthCheck $service.Attributes }}
+  {{ $healthCheck := getHealthCheck $service.TraefikLabels }}
   {{if $healthCheck }}
-  [backends.backend-{{ $backendName }}.healthCheck]
+  [backends."backend-{{ $backendName }}".healthCheck]
+    scheme = "{{ $healthCheck.Scheme }}"
     path = "{{ $healthCheck.Path }}"
     port = {{ $healthCheck.Port }}
     interval = "{{ $healthCheck.Interval }}"
+    hostname = "{{ $healthCheck.Hostname }}"
+    {{if $healthCheck.Headers }}
+    [backends."backend-{{ $backendName }}".healthCheck.headers]
+      {{range $k, $v := $healthCheck.Headers }}
+      {{$k}} = "{{$v}}"
+      {{end}}
+    {{end}}
   {{end}}
 
-  {{ $buffering := getBuffering $service.Attributes }}
+  {{ $buffering := getBuffering $service.TraefikLabels }}
   {{if $buffering }}
-  [backends.backend-{{ $backendName }}.buffering]
+  [backends."backend-{{ $backendName }}".buffering]
     maxRequestBodyBytes = {{ $buffering.MaxRequestBodyBytes }}
     memRequestBodyBytes = {{ $buffering.MemRequestBodyBytes }}
     maxResponseBodyBytes = {{ $buffering.MaxResponseBodyBytes }}
@@ -46,10 +53,10 @@
 
 {{end}}
 {{range $index, $node := .Nodes}}
-
+  {{ $server := getServer $node }}
   [backends."backend-{{ getNodeBackendName $node }}".servers."{{ getServerName $node $index }}"]
-    url = "{{ getProtocol $node.Service.Tags }}://{{ getBackendAddress $node }}:{{ $node.Service.Port }}"
-    weight = {{ getWeight $node.Service.Tags }}
+    url = "{{ $server.URL }}"
+    weight = {{ $server.Weight }}
 
 {{end}}
 
@@ -58,26 +65,68 @@
 
   [frontends."frontend-{{ $service.ServiceName }}"]
     backend = "backend-{{ getServiceBackendName $service }}"
-    priority = {{ getPriority $service.Attributes }}
-    passHostHeader = {{ getPassHostHeader $service.Attributes }}
-    passTLSCert = {{ getPassTLSCert $service.Attributes }}
+    priority = {{ getPriority $service.TraefikLabels }}
+    passHostHeader = {{ getPassHostHeader $service.TraefikLabels }}
+    passTLSCert = {{ getPassTLSCert $service.TraefikLabels }}
 
-    entryPoints = [{{range getFrontEndEntryPoints $service.Attributes }}
+    entryPoints = [{{range getFrontEndEntryPoints $service.TraefikLabels }}
       "{{.}}",
       {{end}}]
 
-    {{ $whitelistSourceRange := getWhitelistSourceRange $service.Attributes }}
-    {{if $whitelistSourceRange }}
-    whitelistSourceRange = [{{range $whitelistSourceRange }}
-      "{{.}}",
-      {{end}}]
+    {{ $auth := getAuth $service.TraefikLabels }}
+
+    {{if $auth }}
+    [frontends."frontend-{{ $service.ServiceName }}".auth]
+      headerField = "{{ $auth.HeaderField }}"
+
+      {{if $auth.Forward }}
+      [frontends."frontend-{{ $service.ServiceName }}".auth.forward]
+        address = "{{ $auth.Forward.Address }}"
+        trustForwardHeader = {{ $auth.Forward.TrustForwardHeader }}
+
+        {{if $auth.Forward.TLS }}
+        [frontends."frontend-{{ $service.ServiceName }}".auth.forward.tls]
+          ca = "{{ $auth.Forward.TLS.CA }}"
+          caOptional = {{ $auth.Forward.TLS.CAOptional }}
+          cert = "{{ $auth.Forward.TLS.Cert }}"
+          key = "{{ $auth.Forward.TLS.Key }}"
+          insecureSkipVerify = {{ $auth.Forward.TLS.InsecureSkipVerify }}
+        {{end}}
+      {{end}}
+
+      {{if $auth.Basic }}
+      [frontends."frontend-{{ $service.ServiceName }}".auth.basic]
+        removeHeader = {{ $auth.Basic.RemoveHeader }}
+        {{if $auth.Basic.Users }}
+        users = [{{range $auth.Basic.Users }}
+          "{{.}}",
+          {{end}}]
+        {{end}}
+        usersFile = "{{ $auth.Basic.UsersFile }}"
+      {{end}}
+
+      {{if $auth.Digest }}
+      [frontends."frontend-{{ $service.ServiceName }}".auth.digest]
+        removeHeader = {{ $auth.Digest.RemoveHeader }}
+        {{if $auth.Digest.Users }}
+        users = [{{range $auth.Digest.Users }}
+          "{{.}}",
+          {{end}}]
+        {{end}}
+        usersFile = "{{ $auth.Digest.UsersFile }}"
+      {{end}}
     {{end}}
 
-    basicAuth = [{{range getBasicAuth $service.Attributes }}
-      "{{.}}",
-      {{end}}]
+    {{ $whitelist := getWhiteList $service.TraefikLabels }}
+    {{if $whitelist }}
+    [frontends."frontend-{{ $service.ServiceName }}".whiteList]
+      sourceRange = [{{range $whitelist.SourceRange }}
+        "{{.}}",
+        {{end}}]
+      useXForwardedFor = {{ $whitelist.UseXForwardedFor }}
+    {{end}}
 
-    {{ $redirect := getRedirect $service.Attributes }}
+    {{ $redirect := getRedirect $service.TraefikLabels }}
     {{if $redirect }}
     [frontends."frontend-{{ $service.ServiceName }}".redirect]
       entryPoint = "{{ $redirect.EntryPoint }}"
@@ -86,39 +135,39 @@
       permanent = {{ $redirect.Permanent }}
     {{end}}
 
-    {{if hasErrorPages $service.Attributes }}
+    {{ $errorPages := getErrorPages $service.TraefikLabels }}
+    {{if $errorPages }}
     [frontends."frontend-{{ $service.ServiceName }}".errors]
-      {{range $pageName, $page := getErrorPages $service.Attributes }}
-      [frontends."frontend-{{ $service.ServiceName }}".errors.{{ $pageName }}]
+      {{range $pageName, $page := $errorPages }}
+      [frontends."frontend-{{ $service.ServiceName }}".errors."{{ $pageName }}"]
         status = [{{range $page.Status }}
           "{{.}}",
           {{end}}]
-        backend = "{{ $page.Backend }}"
+        backend = "backend-{{ $page.Backend }}"
         query = "{{ $page.Query }}"
       {{end}}
     {{end}}
 
-    {{if hasRateLimit $service.Attributes }}
-    {{ $rateLimit := getRateLimit $service.Attributes }}
+    {{ $rateLimit := getRateLimit $service.TraefikLabels }}
+    {{if $rateLimit }}
     [frontends."frontend-{{ $service.ServiceName }}".rateLimit]
       extractorFunc = "{{ $rateLimit.ExtractorFunc }}"
-
       [frontends."frontend-{{ $service.ServiceName }}".rateLimit.rateSet]
-        {{range $limitName, $limit := $rateLimit.RateSet }}
-        [frontends."frontend-{{ $service.ServiceName }}".rateLimit.rateSet.{{ $limitName }}]
+        {{ range $limitName, $limit := $rateLimit.RateSet }}
+        [frontends."frontend-{{ $service.ServiceName }}".rateLimit.rateSet."{{ $limitName }}"]
           period = "{{ $limit.Period }}"
           average = {{ $limit.Average }}
           burst = {{ $limit.Burst }}
         {{end}}
-
     {{end}}
 
-    {{ $headers := getHeaders $service.Attributes }}
+    {{ $headers := getHeaders $service.TraefikLabels }}
     {{if $headers }}
     [frontends."frontend-{{ $service.ServiceName }}".headers]
       SSLRedirect = {{ $headers.SSLRedirect }}
       SSLTemporaryRedirect = {{ $headers.SSLTemporaryRedirect }}
       SSLHost = "{{ $headers.SSLHost }}"
+      SSLForceHost = {{ $headers.SSLForceHost }}
       STSSeconds = {{ $headers.STSSeconds }}
       STSIncludeSubdomains = {{ $headers.STSIncludeSubdomains }}
       STSPreload = {{ $headers.STSPreload }}
@@ -127,6 +176,7 @@
       CustomFrameOptionsValue = "{{ $headers.CustomFrameOptionsValue }}"
       ContentTypeNosniff = {{ $headers.ContentTypeNosniff }}
       BrowserXSSFilter = {{ $headers.BrowserXSSFilter }}
+      CustomBrowserXSSValue = "{{ $headers.CustomBrowserXSSValue }}"
       ContentSecurityPolicy = "{{ $headers.ContentSecurityPolicy }}"
       PublicKey = "{{ $headers.PublicKey }}"
       ReferrerPolicy = "{{ $headers.ReferrerPolicy }}"

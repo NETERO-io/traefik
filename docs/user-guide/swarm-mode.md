@@ -87,7 +87,7 @@ docker-machine ssh manager "docker service create \
 	--network traefik-net \
 	traefik \
 	--docker \
-	--docker.swarmmode \
+	--docker.swarmMode \
 	--docker.domain=traefik \
 	--docker.watch \
 	--api"
@@ -101,8 +101,8 @@ Let's explain this command:
 | `--constraint=node.role==manager`                                           | we ask docker to schedule Træfik on a manager node.                                            |
 | `--mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock` | we bind mount the docker socket where Træfik is scheduled to be able to speak to the daemon.   |
 | `--network traefik-net`                                                     | we attach the Træfik service (and thus the underlying container) to the `traefik-net` network. |
-| `--docker`                                                                  | enable docker backend, and `--docker.swarmmode` to enable the swarm mode on Træfik.            |
-| `--api                                                                      | activate the webUI on port 8080                                                                |
+| `--docker`                                                                  | enable docker provider, and `--docker.swarmMode` to enable the swarm mode on Træfik.            |
+| `--api`                                                                      | activate the webUI on port 8080                                                                |
 
 
 ## Deploy your apps
@@ -121,7 +121,6 @@ docker-machine ssh manager "docker service create \
 	--name whoami1 \
 	--label traefik.port=80 \
 	--network traefik-net \
-	--label traefik.backend.loadbalancer.sticky=true \
 	emilevauge/whoami"
 ```
 
@@ -330,4 +329,4 @@ X-Forwarded-Proto: http
 X-Forwarded-Server: 77fc29c69fe4
 ```
 
-![](https://i.giphy.com/ujUdrdpX7Ok5W.gif)
+![GIF Magica](https://i.giphy.com/ujUdrdpX7Ok5W.gif)

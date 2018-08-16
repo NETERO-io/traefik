@@ -19,7 +19,8 @@ import (
 type Provider interface {
 	// Provide allows the provider to provide configurations to traefik
 	// using the given configuration channel.
-	Provide(configurationChan chan<- types.ConfigMessage, pool *safe.Pool, constraints types.Constraints) error
+	Provide(configurationChan chan<- types.ConfigMessage, pool *safe.Pool) error
+	Init(constraints types.Constraints) error
 }
 
 // BaseProvider should be inherited by providers
@@ -29,6 +30,12 @@ type BaseProvider struct {
 	Constraints               types.Constraints `description:"Filter services by constraint, matching with Traefik tags." export:"true"`
 	Trace                     bool              `description:"Display additional provider logs (if available)." export:"true"`
 	DebugLogGeneratedTemplate bool              `description:"Enable debug logging of generated configuration template." export:"true"`
+}
+
+// Init for compatibility reason the BaseProvider implements an empty Init
+func (p *BaseProvider) Init(constraints types.Constraints) error {
+	p.Constraints = append(p.Constraints, constraints...)
+	return nil
 }
 
 // MatchConstraints must match with EVERY single constraint
@@ -50,10 +57,17 @@ func (p *BaseProvider) MatchConstraints(tags []string) (bool, *types.Constraint)
 	return true, nil
 }
 
-// GetConfiguration return the provider configuration using templating
-func (p *BaseProvider) GetConfiguration(defaultTemplateFile string, funcMap template.FuncMap, templateObjects interface{}) (*types.Configuration, error) {
-	configuration := new(types.Configuration)
+// GetConfiguration return the provider configuration from default template (file or content) or overrode template file
+func (p *BaseProvider) GetConfiguration(defaultTemplate string, funcMap template.FuncMap, templateObjects interface{}) (*types.Configuration, error) {
+	tmplContent, err := p.getTemplateContent(defaultTemplate)
+	if err != nil {
+		return nil, err
+	}
+	return p.CreateConfiguration(tmplContent, funcMap, templateObjects)
+}
 
+// CreateConfiguration create a provider configuration from content using templating
+func (p *BaseProvider) CreateConfiguration(tmplContent string, funcMap template.FuncMap, templateObjects interface{}) (*types.Configuration, error) {
 	var defaultFuncMap = sprig.TxtFuncMap()
 	// tolower is deprecated in favor of sprig's lower function
 	defaultFuncMap["tolower"] = strings.ToLower
@@ -65,12 +79,7 @@ func (p *BaseProvider) GetConfiguration(defaultTemplateFile string, funcMap temp
 
 	tmpl := template.New(p.Filename).Funcs(defaultFuncMap)
 
-	tmplContent, err := p.getTemplateContent(defaultTemplateFile)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = tmpl.Parse(tmplContent)
+	_, err := tmpl.Parse(tmplContent)
 	if err != nil {
 		return nil, err
 	}
@@ -83,9 +92,16 @@ func (p *BaseProvider) GetConfiguration(defaultTemplateFile string, funcMap temp
 
 	var renderedTemplate = buffer.String()
 	if p.DebugLogGeneratedTemplate {
-		log.Debugf("Rendering results of %s:\n%s", defaultTemplateFile, renderedTemplate)
+		log.Debugf("Template content: %s", tmplContent)
+		log.Debugf("Rendering results: %s", renderedTemplate)
 	}
-	if _, err := toml.Decode(renderedTemplate, configuration); err != nil {
+	return p.DecodeConfiguration(renderedTemplate)
+}
+
+// DecodeConfiguration Decode a *types.Configuration from a content
+func (p *BaseProvider) DecodeConfiguration(content string) (*types.Configuration, error) {
+	configuration := new(types.Configuration)
+	if _, err := toml.Decode(content, configuration); err != nil {
 		return nil, err
 	}
 	return configuration, nil

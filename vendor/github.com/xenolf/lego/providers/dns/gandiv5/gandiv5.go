@@ -7,12 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/xenolf/lego/acme"
+	"github.com/xenolf/lego/log"
+	"github.com/xenolf/lego/platform/config/env"
 )
 
 // Gandi API reference:       http://doc.livedns.gandi.net/
@@ -21,6 +22,7 @@ var (
 	// endpoint is the Gandi API endpoint used by Present and
 	// CleanUp. It is overridden during tests.
 	endpoint = "https://dns.api.gandi.net/api/v5"
+
 	// findZoneByFqdn determines the DNS zone of an fqdn. It is overridden
 	// during tests.
 	findZoneByFqdn = acme.FindZoneByFqdn
@@ -39,13 +41,18 @@ type DNSProvider struct {
 	apiKey          string
 	inProgressFQDNs map[string]inProgressInfo
 	inProgressMu    sync.Mutex
+	client          *http.Client
 }
 
 // NewDNSProvider returns a DNSProvider instance configured for Gandi.
 // Credentials must be passed in the environment variable: GANDIV5_API_KEY.
 func NewDNSProvider() (*DNSProvider, error) {
-	apiKey := os.Getenv("GANDIV5_API_KEY")
-	return NewDNSProviderCredentials(apiKey)
+	values, err := env.Get("GANDIV5_API_KEY")
+	if err != nil {
+		return nil, fmt.Errorf("GandiDNS: %v", err)
+	}
+
+	return NewDNSProviderCredentials(values["GANDIV5_API_KEY"])
 }
 
 // NewDNSProviderCredentials uses the supplied credentials to return a
@@ -57,6 +64,7 @@ func NewDNSProviderCredentials(apiKey string) (*DNSProvider, error) {
 	return &DNSProvider{
 		apiKey:          apiKey,
 		inProgressFQDNs: make(map[string]inProgressInfo),
+		client:          &http.Client{Timeout: 10 * time.Second},
 	}, nil
 }
 
@@ -66,11 +74,13 @@ func (d *DNSProvider) Present(domain, token, keyAuth string) error {
 	if ttl < 300 {
 		ttl = 300 // 300 is gandi minimum value for ttl
 	}
+
 	// find authZone
 	authZone, err := findZoneByFqdn(fqdn, acme.RecursiveNameservers)
 	if err != nil {
 		return fmt.Errorf("Gandi DNS: findZoneByFqdn failure: %v", err)
 	}
+
 	// determine name of TXT record
 	if !strings.HasSuffix(
 		strings.ToLower(fqdn), strings.ToLower("."+authZone)) {
@@ -78,15 +88,18 @@ func (d *DNSProvider) Present(domain, token, keyAuth string) error {
 			"Gandi DNS: unexpected authZone %s for fqdn %s", authZone, fqdn)
 	}
 	name := fqdn[:len(fqdn)-len("."+authZone)]
+
 	// acquire lock and check there is not a challenge already in
 	// progress for this value of authZone
 	d.inProgressMu.Lock()
 	defer d.inProgressMu.Unlock()
+
 	// add TXT record into authZone
 	err = d.addTXTRecord(acme.UnFqdn(authZone), name, value, ttl)
 	if err != nil {
 		return err
 	}
+
 	// save data necessary for CleanUp
 	d.inProgressFQDNs[fqdn] = inProgressInfo{
 		authZone:  authZone,
@@ -98,6 +111,7 @@ func (d *DNSProvider) Present(domain, token, keyAuth string) error {
 // CleanUp removes the TXT record matching the specified parameters.
 func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
 	fqdn, _, _ := acme.DNS01Record(domain, keyAuth)
+
 	// acquire lock and retrieve authZone
 	d.inProgressMu.Lock()
 	defer d.inProgressMu.Unlock()
@@ -105,15 +119,13 @@ func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
 		// if there is no cleanup information then just return
 		return nil
 	}
+
 	fieldName := d.inProgressFQDNs[fqdn].fieldName
 	authZone := d.inProgressFQDNs[fqdn].authZone
 	delete(d.inProgressFQDNs, fqdn)
+
 	// delete TXT record from authZone
-	err := d.deleteTXTRecord(acme.UnFqdn(authZone), fieldName)
-	if err != nil {
-		return err
-	}
-	return nil
+	return d.deleteTXTRecord(acme.UnFqdn(authZone), fieldName)
 }
 
 // Timeout returns the values (20*time.Minute, 20*time.Second) which
@@ -149,17 +161,18 @@ func (d *DNSProvider) sendRequest(method string, resource string, payload interf
 	if err != nil {
 		return nil, err
 	}
+
 	req, err := http.NewRequest(method, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
+
 	req.Header.Set("Content-Type", "application/json")
 	if len(d.apiKey) > 0 {
 		req.Header.Set("X-Api-Key", d.apiKey)
 	}
 
-	client := &http.Client{Timeout: time.Duration(10 * time.Second)}
-	resp, err := client.Do(req)
+	resp, err := d.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +183,7 @@ func (d *DNSProvider) sendRequest(method string, resource string, payload interf
 	}
 	var response responseStruct
 	err = json.NewDecoder(resp.Body).Decode(&response)
-	if err != nil && method != "DELETE" {
+	if err != nil && method != http.MethodDelete {
 		return nil, err
 	}
 
@@ -181,23 +194,23 @@ func (d *DNSProvider) sendRequest(method string, resource string, payload interf
 
 func (d *DNSProvider) addTXTRecord(domain string, name string, value string, ttl int) error {
 	target := fmt.Sprintf("domains/%s/records/%s/TXT", domain, name)
-	response, err := d.sendRequest("PUT", target, addFieldRequest{
+	response, err := d.sendRequest(http.MethodPut, target, addFieldRequest{
 		RRSetTTL:    ttl,
 		RRSetValues: []string{value},
 	})
 	if response != nil {
-		fmt.Printf("Gandi DNS: %s\n", response.Message)
+		log.Infof("Gandi DNS: %s", response.Message)
 	}
 	return err
 }
 
 func (d *DNSProvider) deleteTXTRecord(domain string, name string) error {
 	target := fmt.Sprintf("domains/%s/records/%s/TXT", domain, name)
-	response, err := d.sendRequest("DELETE", target, deleteFieldRequest{
+	response, err := d.sendRequest(http.MethodDelete, target, deleteFieldRequest{
 		Delete: true,
 	})
 	if response != nil && response.Message == "" {
-		fmt.Printf("Gandi DNS: Zone record deleted\n")
+		log.Infof("Gandi DNS: Zone record deleted")
 	}
 	return err
 }

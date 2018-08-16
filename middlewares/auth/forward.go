@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	xForwardedURI = "X-Forwarded-Uri"
+	xForwardedURI    = "X-Forwarded-Uri"
+	xForwardedMethod = "X-Forwarded-Method"
 )
 
 // Forward the authentication to a external server
@@ -25,6 +26,7 @@ func Forward(config *types.Forward, w http.ResponseWriter, r *http.Request, next
 			return http.ErrUseLastResponse
 		},
 	}
+
 	if config.TLS != nil {
 		tlsConfig, err := config.TLS.CreateTLSConfig()
 		if err != nil {
@@ -32,10 +34,12 @@ func Forward(config *types.Forward, w http.ResponseWriter, r *http.Request, next
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+
 		httpClient.Transport = &http.Transport{
 			TLSClientConfig: tlsConfig,
 		}
 	}
+
 	forwardReq, err := http.NewRequest(http.MethodGet, config.Address, nil)
 	tracing.LogRequest(tracing.GetSpan(r), forwardReq)
 	if err != nil {
@@ -68,6 +72,8 @@ func Forward(config *types.Forward, w http.ResponseWriter, r *http.Request, next
 	if forwardResponse.StatusCode < http.StatusOK || forwardResponse.StatusCode >= http.StatusMultipleChoices {
 		log.Debugf("Remote error %s. StatusCode: %d", config.Address, forwardResponse.StatusCode)
 
+		utils.CopyHeaders(w.Header(), forwardResponse.Header)
+
 		// Grab the location header, if any.
 		redirectURL, err := forwardResponse.Location()
 
@@ -79,18 +85,20 @@ func Forward(config *types.Forward, w http.ResponseWriter, r *http.Request, next
 			}
 		} else if redirectURL.String() != "" {
 			// Set the location in our response if one was sent back.
-			w.Header().Add("Location", redirectURL.String())
-		}
-
-		// Pass any Set-Cookie headers the forward auth server provides
-		for _, cookie := range forwardResponse.Cookies() {
-			w.Header().Add("Set-Cookie", cookie.String())
+			w.Header().Set("Location", redirectURL.String())
 		}
 
 		tracing.LogResponseCode(tracing.GetSpan(r), forwardResponse.StatusCode)
 		w.WriteHeader(forwardResponse.StatusCode)
-		w.Write(body)
+
+		if _, err = w.Write(body); err != nil {
+			log.Error(err)
+		}
 		return
+	}
+
+	for _, headerName := range config.AuthResponseHeaders {
+		r.Header.Set(headerName, forwardResponse.Header.Get(headerName))
 	}
 
 	r.RequestURI = r.URL.RequestURI()
@@ -107,6 +115,14 @@ func writeHeader(req *http.Request, forwardReq *http.Request, trustForwardHeader
 			}
 		}
 		forwardReq.Header.Set(forward.XForwardedFor, clientIP)
+	}
+
+	if xMethod := req.Header.Get(xForwardedMethod); xMethod != "" && trustForwardHeader {
+		forwardReq.Header.Set(xForwardedMethod, xMethod)
+	} else if req.Method != "" {
+		forwardReq.Header.Set(xForwardedMethod, req.Method)
+	} else {
+		forwardReq.Header.Del(xForwardedMethod)
 	}
 
 	if xfp := req.Header.Get(forward.XForwardedProto); xfp != "" && trustForwardHeader {

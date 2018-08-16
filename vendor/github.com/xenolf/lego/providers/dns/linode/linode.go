@@ -4,12 +4,13 @@ package linode
 
 import (
 	"errors"
-	"os"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/timewasted/linode/dns"
 	"github.com/xenolf/lego/acme"
+	"github.com/xenolf/lego/platform/config/env"
 )
 
 const (
@@ -19,20 +20,24 @@ const (
 )
 
 type hostedZoneInfo struct {
-	domainId     int
+	domainID     int
 	resourceName string
 }
 
 // DNSProvider implements the acme.ChallengeProvider interface.
 type DNSProvider struct {
-	linode *dns.DNS
+	client *dns.DNS
 }
 
 // NewDNSProvider returns a DNSProvider instance configured for Linode.
 // Credentials must be passed in the environment variable: LINODE_API_KEY.
 func NewDNSProvider() (*DNSProvider, error) {
-	apiKey := os.Getenv("LINODE_API_KEY")
-	return NewDNSProviderCredentials(apiKey)
+	values, err := env.Get("LINODE_API_KEY")
+	if err != nil {
+		return nil, fmt.Errorf("Linode: %v", err)
+	}
+
+	return NewDNSProviderCredentials(values["LINODE_API_KEY"])
 }
 
 // NewDNSProviderCredentials uses the supplied credentials to return a
@@ -43,7 +48,7 @@ func NewDNSProviderCredentials(apiKey string) (*DNSProvider, error) {
 	}
 
 	return &DNSProvider{
-		linode: dns.New(apiKey),
+		client: dns.New(apiKey),
 	}, nil
 }
 
@@ -72,7 +77,7 @@ func (p *DNSProvider) Present(domain, token, keyAuth string) error {
 		return err
 	}
 
-	if _, err = p.linode.CreateDomainResourceTXT(zone.domainId, acme.UnFqdn(fqdn), value, 60); err != nil {
+	if _, err = p.client.CreateDomainResourceTXT(zone.domainID, acme.UnFqdn(fqdn), value, 60); err != nil {
 		return err
 	}
 
@@ -88,7 +93,7 @@ func (p *DNSProvider) CleanUp(domain, token, keyAuth string) error {
 	}
 
 	// Get all TXT records for the specified domain.
-	resources, err := p.linode.GetResourcesByType(zone.domainId, "TXT")
+	resources, err := p.client.GetResourcesByType(zone.domainID, "TXT")
 	if err != nil {
 		return err
 	}
@@ -96,12 +101,12 @@ func (p *DNSProvider) CleanUp(domain, token, keyAuth string) error {
 	// Remove the specified resource, if it exists.
 	for _, resource := range resources {
 		if resource.Name == zone.resourceName && resource.Target == value {
-			resp, err := p.linode.DeleteDomainResource(resource.DomainID, resource.ResourceID)
+			resp, err := p.client.DeleteDomainResource(resource.DomainID, resource.ResourceID)
 			if err != nil {
 				return err
 			}
 			if resp.ResourceID != resource.ResourceID {
-				return errors.New("Error deleting resource: resource IDs do not match!")
+				return errors.New("error deleting resource: resource IDs do not match")
 			}
 			break
 		}
@@ -119,13 +124,13 @@ func (p *DNSProvider) getHostedZoneInfo(fqdn string) (*hostedZoneInfo, error) {
 	resourceName := strings.TrimSuffix(fqdn, "."+authZone)
 
 	// Query the authority zone.
-	domain, err := p.linode.GetDomain(acme.UnFqdn(authZone))
+	domain, err := p.client.GetDomain(acme.UnFqdn(authZone))
 	if err != nil {
 		return nil, err
 	}
 
 	return &hostedZoneInfo{
-		domainId:     domain.DomainID,
+		domainID:     domain.DomainID,
 		resourceName: resourceName,
 	}, nil
 }

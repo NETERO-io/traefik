@@ -17,7 +17,7 @@ The config files used in this guide can be found in the [examples directory](htt
 
 ### Role Based Access Control configuration (Kubernetes 1.6+ only)
 
-Kubernetes introduces [Role Based Access Control (RBAC)](https://kubernetes.io/docs/admin/authorization/rbac/) in 1.6+ to allow fine-grained control of Kubernetes resources and API.
+Kubernetes introduces [Role Based Access Control (RBAC)](https://kubernetes.io/docs/reference/access-authn-authz/rbac/) in 1.6+ to allow fine-grained control of Kubernetes resources and API.
 
 If your cluster is configured with RBAC, you will need to authorize Træfik to use the Kubernetes API. There are two ways to set up the proper permission: Via namespace-specific RoleBindings or a single, global ClusterRoleBinding.
 
@@ -81,9 +81,11 @@ For namespaced restrictions, one RoleBinding is required per watched namespace a
 It is possible to use Træfik with a [Deployment](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) or a [DaemonSet](https://kubernetes.io/docs/concepts/workloads/controllers/daemonset/) object,
  whereas both options have their own pros and cons:
 
-- The scalability is much better when using a Deployment, because you will have a Single-Pod-per-Node model when using the DaemonSet.
-- It is possible to exclusively run a Service on a dedicated set of machines using taints and tolerations with a DaemonSet.
-- On the other hand the DaemonSet allows you to access any Node directly on Port 80 and 443, where you have to setup a [Service](https://kubernetes.io/docs/concepts/services-networking/service/) object with a Deployment.
+- The scalability can be much better when using a Deployment, because you will have a Single-Pod-per-Node model when using a DaemonSet, whereas you may need less replicas based on your environment when using a Deployment.
+- DaemonSets automatically scale to new nodes, when the nodes join the cluster, whereas Deployment pods are only scheduled on new nodes if required.
+- DaemonSets ensure that only one replica of pods run on any single node. Deployments require affinity settings if you want to ensure that two pods don't end up on the same node.
+- DaemonSets can be run with the `NET_BIND_SERVICE` capability, which will allow it to bind to port 80/443/etc on each host. This will allow bypassing the kube-proxy, and reduce traffic hops. Note that this is against the Kubernetes Best Practices [Guidelines](https://kubernetes.io/docs/concepts/configuration/overview/#services), and raises the potential for scheduling/scaling issues. Despite potential issues, this remains the choice for most ingress controllers.
+- If you are unsure which to choose, start with the Daemonset.
 
 The Deployment objects looks like this:
 
@@ -118,9 +120,15 @@ spec:
       containers:
       - image: traefik
         name: traefik-ingress-lb
+        ports:
+        - name: http
+          containerPort: 80
+        - name: admin
+          containerPort: 8080
         args:
         - --api
         - --kubernetes
+        - --logLevel=INFO
 ---
 kind: Service
 apiVersion: v1
@@ -171,7 +179,6 @@ spec:
     spec:
       serviceAccountName: traefik-ingress-controller
       terminationGracePeriodSeconds: 60
-      hostNetwork: true
       containers:
       - image: traefik
         name: traefik-ingress-lb
@@ -182,11 +189,15 @@ spec:
         - name: admin
           containerPort: 8080
         securityContext:
-          privileged: true
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_BIND_SERVICE
         args:
-        - -d
         - --api
         - --kubernetes
+        - --logLevel=INFO
 ---
 kind: Service
 apiVersion: v1
@@ -203,10 +214,12 @@ spec:
     - protocol: TCP
       port: 8080
       name: admin
-  type: NodePort
 ```
 
 [examples/k8s/traefik-ds.yaml](https://github.com/containous/traefik/tree/master/examples/k8s/traefik-ds.yaml)
+
+!!! note
+    This will create a Daemonset that uses privileged ports 80/8080 on the host. This may not work on all providers, but illustrates the static (non-NodePort) hostPort binding. The `traefik-ingress-service` can still be used inside the cluster to access the DaemonSet pods.
 
 To deploy Træfik to your cluster start by submitting one of the YAML files to the cluster with `kubectl`:
 
@@ -288,7 +301,21 @@ Install the Træfik chart by:
 ```shell
 helm install stable/traefik
 ```
+Install the Træfik chart using a values.yaml file.
 
+```shell
+helm install --values values.yaml stable/traefik
+```
+
+```yaml
+dashboard:
+  enabled: true
+  domain: traefik-ui.minikube
+kubernetes:
+  namespaces:
+    - default
+    - kube-system
+```
 For more information, check out [the documentation](https://github.com/kubernetes/charts/tree/master/stable/traefik).
 
 ## Submitting an Ingress to the Cluster
@@ -305,7 +332,8 @@ spec:
   selector:
     k8s-app: traefik-ingress-lb
   ports:
-  - port: 80
+  - name: web
+    port: 80
     targetPort: 8080
 ---
 apiVersion: extensions/v1beta1
@@ -313,16 +341,15 @@ kind: Ingress
 metadata:
   name: traefik-web-ui
   namespace: kube-system
-  annotations:
-    kubernetes.io/ingress.class: traefik
 spec:
   rules:
   - host: traefik-ui.minikube
     http:
       paths:
-      - backend:
+      - path: /
+        backend:
           serviceName: traefik-web-ui
-          servicePort: 80
+          servicePort: web
 ```
 
 [examples/k8s/ui.yaml](https://github.com/containous/traefik/tree/master/examples/k8s/ui.yaml)
@@ -345,7 +372,8 @@ We should now be able to visit [traefik-ui.minikube](http://traefik-ui.minikube)
 ### Add a TLS Certificate to the Ingress
 
 !!! note
-    For this example to work you need a TLS entrypoint. You don't have to provide a TLS certificate at this point. For more details see [here](/configuration/entrypoints/).
+    For this example to work you need a TLS entrypoint. You don't have to provide a TLS certificate at this point.
+    For more details see [here](/configuration/entrypoints/).
 
 To setup an HTTPS-protected ingress, you can leverage the TLS feature of the ingress resource.
 
@@ -366,10 +394,11 @@ spec:
           serviceName: traefik-web-ui
           servicePort: 80
   tls:
-    secretName: traefik-ui-tls-cert
+   - secretName: traefik-ui-tls-cert
 ```
 
-In addition to the modified ingress you need to provide the TLS certificate via a Kubernetes secret in the same namespace as the ingress. The following two commands will generate a new certificate and create a secret containing the key and cert files.
+In addition to the modified ingress you need to provide the TLS certificate via a Kubernetes secret in the same namespace as the ingress.
+The following two commands will generate a new certificate and create a secret containing the key and cert files.
 
 ```shell
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout tls.key -out tls.crt -subj "/CN=traefik-ui.minikube"
@@ -379,13 +408,16 @@ kubectl -n kube-system create secret tls traefik-ui-tls-cert --key=tls.key --cer
 If there are any errors while loading the TLS section of an ingress, the whole ingress will be skipped.
 
 !!! note
-    The secret must have two entries named `tls.key`and `tls.crt`. See the [Kubernetes documentation](https://kubernetes.io/docs/concepts/services-networking/ingress/#tls) for more details.
+    The secret must have two entries named `tls.key`and `tls.crt`.
+    See the [Kubernetes documentation](https://kubernetes.io/docs/concepts/services-networking/ingress/#tls) for more details.
 
 !!! note
-    The TLS certificates will be added to all entrypoints defined by the ingress annotation `traefik.frontend.entryPoints`. If no such annotation is provided, the TLS certificates will be added to all TLS-enabled `defaultEntryPoints`.
+    The TLS certificates will be added to all entrypoints defined by the ingress annotation `traefik.frontend.entryPoints`.
+    If no such annotation is provided, the TLS certificates will be added to all TLS-enabled `defaultEntryPoints`.
 
 !!! note
-    The field `hosts` in the TLS configuration is ignored. Instead, the domains provided by the certificate are used for this purpose. It is recommended to not use wildcard certificates as they will match globally.
+    The field `hosts` in the TLS configuration is ignored. Instead, the domains provided by the certificate are used for this purpose.
+    It is recommended to not use wildcard certificates as they will match globally.
 
 ## Basic Authentication
 
@@ -393,7 +425,7 @@ It's possible to protect access to Træfik through basic authentication. (See th
 
 ### Creating the Secret
 
-A. Use `htpasswd` to create a file containing the username and the base64-encoded password:
+A. Use `htpasswd` to create a file containing the username and the MD5-encoded password:
 
 ```shell
 htpasswd -c ./auth myusername
@@ -421,8 +453,8 @@ kubectl create secret generic mysecret --from-file auth --namespace=monitoring
 
 C. Attach the following annotations to the Ingress object:
 
-- `ingress.kubernetes.io/auth-type: "basic"`
-- `ingress.kubernetes.io/auth-secret: "mysecret"`
+- `traefik.ingress.kubernetes.io/auth-type: "basic"`
+- `traefik.ingress.kubernetes.io/auth-secret: "mysecret"`
 
 They specify basic authentication and reference the Secret `mysecret` containing the credentials.
 
@@ -436,8 +468,8 @@ metadata:
  namespace: monitoring
  annotations:
    kubernetes.io/ingress.class: traefik
-   ingress.kubernetes.io/auth-type: "basic"
-   ingress.kubernetes.io/auth-secret: "mysecret"
+   traefik.ingress.kubernetes.io/auth-type: "basic"
+   traefik.ingress.kubernetes.io/auth-secret: "mysecret"
 spec:
  rules:
  - host: dashboard.prometheus.example.com
@@ -826,13 +858,106 @@ Sometimes Træfik runs along other Ingress controller implementations. One such 
 
 The `kubernetes.io/ingress.class` annotation can be attached to any Ingress object in order to control whether Træfik should handle it.
 
-If the annotation is missing, contains an empty value, or the value `traefik`, then the Træfik controller will take responsibility and process the associated Ingress object. If the annotation contains any other value (usually the name of a different Ingress controller), Træfik will ignore the object.
+If the annotation is missing, contains an empty value, or the value `traefik`, then the Træfik controller will take responsibility and process the associated Ingress object.
+
+It is also possible to set the `ingressClass` option in Træfik to a particular value. Træfik will only process matching Ingress objects.
+For instance, setting the option to `traefik-internal` causes Træfik to process Ingress objects with the same `kubernetes.io/ingress.class` annotation value, ignoring all other objects (including those with a `traefik` value, empty value, and missing annotation).
+
+!!! note
+    Letting multiple ingress controllers handle the same ingress objects can lead to unintended behavior.
+    It is recommended to prefix all ingressClass values with `traefik` to avoid unintended collisions with other ingress implementations.
 
 ### Between multiple Træfik Deployments
 
-Sometimes multiple Træfik Deployments are supposed to run concurrently. For instance, it is conceivable to have one Deployment deal with internal and another one with external traffic.
+Sometimes multiple Træfik Deployments are supposed to run concurrently.
+For instance, it is conceivable to have one Deployment deal with internal and another one with external traffic.
 
-For such cases, it is advisable to classify Ingress objects through a label and configure the `labelSelector` option per each Træfik Deployment accordingly. To stick with the internal/external example above, all Ingress objects meant for internal traffic could receive a `traffic-type: internal` label while objects designated for external traffic receive a `traffic-type: external` label. The label selectors on the Træfik Deployments would then be `traffic-type=internal` and `traffic-type=external`, respectively.
+For such cases, it is advisable to classify Ingress objects through a label and configure the `labelSelector` option per each Træfik Deployment accordingly.
+To stick with the internal/external example above, all Ingress objects meant for internal traffic could receive a `traffic-type: internal` label while objects designated for external traffic receive a `traffic-type: external` label.
+The label selectors on the Træfik Deployments would then be `traffic-type=internal` and `traffic-type=external`, respectively.
+
+## Traffic Splitting
+
+It is possible to split Ingress traffic in a fine-grained manner between multiple deployments using _service weights_.
+
+One canonical use case is canary releases where a deployment representing a newer release is to receive an initially small but ever-increasing fraction of the requests over time.
+The way this can be done in Træfik is to specify a percentage of requests that should go into each deployment.
+
+For instance, say that an application `my-app` runs in version 1.
+A newer version 2 is about to be released, but confidence in the robustness and reliability of new version running in production can only be gained gradually.
+Thus, a new deployment `my-app-canary` is created and scaled to a replica count that suffices for a 1% traffic share.
+Along with it, a Service object is created as usual.
+
+The Ingress specification would look like this:
+
+```yaml
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  annotations:
+    traefik.ingress.kubernetes.io/service-weights: |
+      my-app: 99%
+      my-app-canary: 1%
+  name: my-app
+spec:
+  rules:
+  - http:
+      paths:
+      - backend:
+          serviceName: my-app
+          servicePort: 80
+        path: /
+      - backend:
+          serviceName: my-app-canary
+          servicePort: 80
+        path: /
+```
+
+Take note of the `traefik.ingress.kubernetes.io/service-weights` annotation: It specifies the distribution of requests among the referenced backend services, `my-app` and `my-app-canary`.
+With this definition, Træfik will route 99% of the requests to the pods backed by the `my-app` deployment, and 1% to those backed by `my-app-canary`.
+Over time, the ratio may slowly shift towards the canary deployment until it is deemed to replace the previous main application, in steps such as 5%/95%, 10%/90%, 50%/50%, and finally 100%/0%.
+
+A few conditions must hold for service weights to be applied correctly:
+
+- The associated service backends must share the same path and host.
+- The total percentage shared across all service backends must yield 100% (see the section on [omitting the final service](#omitting-the-final-service), however).
+- The percentage values are interpreted as floating point numbers to a supported precision as defined in the [annotation documentation](/configuration/backends/kubernetes#general-annotations).
+
+### Omitting the Final Service
+
+When specifying service weights, it is possible to omit exactly one service for convenience reasons.
+
+For instance, the following definition shows how to split requests in a scenario where a canary release is accompanied by a baseline deployment for easier metrics comparison or automated canary analysis:
+
+```yaml
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  annotations:
+    traefik.ingress.kubernetes.io/service-weights: |
+      my-app-canary: 10%
+      my-app-baseline: 10%
+  name: app
+spec:
+  rules:
+  - http:
+      paths:
+      - backend:
+          serviceName: my-app-canary
+          servicePort: 80
+        path: /
+      - backend:
+          serviceName: my-app-baseline
+          servicePort: 80
+        path: /
+      - backend:
+          serviceName: my-app-main
+          servicePort: 80
+        path: /
+```
+
+This configuration assigns 80% of traffic to `my-app-main` automatically, thus freeing the user from having to complete percentage values manually.
+This becomes handy when increasing shares for canary releases continuously.
 
 ## Production advice
 

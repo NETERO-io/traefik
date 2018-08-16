@@ -1,11 +1,13 @@
 package integration
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/containous/traefik/integration/try"
+	"github.com/containous/traefik/provider/label"
 	"github.com/go-check/check"
 	"github.com/hashicorp/consul/api"
 	checker "github.com/vdemeester/shakers"
@@ -40,7 +42,7 @@ func (s *ConsulCatalogSuite) waitToElectConsulLeader() error {
 		leader, err := s.consulClient.Status().Leader()
 
 		if err != nil || len(leader) == 0 {
-			return fmt.Errorf("Leader not found. %v", err)
+			return fmt.Errorf("leader not found. %v", err)
 		}
 
 		return nil
@@ -53,9 +55,6 @@ func (s *ConsulCatalogSuite) createConsulClient(config *api.Config, c *check.C) 
 	}
 	s.consulClient = consulClient
 	return consulClient
-}
-func (s *ConsulCatalogSuite) startConsulService(c *check.C) {
-
 }
 
 func (s *ConsulCatalogSuite) registerService(name string, address string, port int, tags []string) error {
@@ -77,28 +76,45 @@ func (s *ConsulCatalogSuite) registerService(name string, address string, port i
 	return err
 }
 
-func (s *ConsulCatalogSuite) registerAgentService(name string, address string, port int, tags []string) error {
+func (s *ConsulCatalogSuite) registerAgentService(name string, address string, port int, tags []string, withHealthCheck bool) error {
 	agent := s.consulClient.Agent()
-	err := agent.ServiceRegister(
+	var healthCheck *api.AgentServiceCheck
+	if withHealthCheck {
+		healthCheck = &api.AgentServiceCheck{
+			HTTP:     "http://" + address,
+			Interval: "10s",
+		}
+	} else {
+		healthCheck = nil
+	}
+	return agent.ServiceRegister(
 		&api.AgentServiceRegistration{
 			ID:      address,
 			Tags:    tags,
 			Name:    name,
 			Address: address,
 			Port:    port,
-			Check: &api.AgentServiceCheck{
-				HTTP:     "http://" + address,
-				Interval: "10s",
-			},
+			Check:   healthCheck,
 		},
 	)
-	return err
+}
+
+func (s *ConsulCatalogSuite) registerCheck(name string, address string, port int) error {
+	agent := s.consulClient.Agent()
+	checkRegistration := &api.AgentCheckRegistration{
+		ID:        fmt.Sprintf("%s-%s", name, address),
+		Name:      name,
+		ServiceID: address,
+	}
+	checkRegistration.HTTP = fmt.Sprintf("http://%s:%d/health", address, port)
+	checkRegistration.Interval = "2s"
+	checkRegistration.CheckID = address
+	return agent.CheckRegister(checkRegistration)
 }
 
 func (s *ConsulCatalogSuite) deregisterAgentService(address string) error {
 	agent := s.consulClient.Agent()
-	err := agent.ServiceDeregister(address)
-	return err
+	return agent.ServiceDeregister(address)
 }
 
 func (s *ConsulCatalogSuite) deregisterService(name string, address string) error {
@@ -112,6 +128,22 @@ func (s *ConsulCatalogSuite) deregisterService(name string, address string) erro
 		&api.WriteOptions{},
 	)
 	return err
+}
+
+func (s *ConsulCatalogSuite) consulEnableServiceMaintenance(name string) error {
+	return s.consulClient.Agent().EnableServiceMaintenance(name, fmt.Sprintf("Maintenance mode for service %s", name))
+}
+
+func (s *ConsulCatalogSuite) consulDisableServiceMaintenance(name string) error {
+	return s.consulClient.Agent().DisableServiceMaintenance(name)
+}
+
+func (s *ConsulCatalogSuite) consulEnableNodeMaintenance() error {
+	return s.consulClient.Agent().EnableNodeMaintenance("Maintenance mode for node")
+}
+
+func (s *ConsulCatalogSuite) consulDisableNodeMaintenance() error {
+	return s.consulClient.Agent().DisableNodeMaintenance()
 }
 
 func (s *ConsulCatalogSuite) TestSimpleConfiguration(c *check.C) {
@@ -160,7 +192,6 @@ func (s *ConsulCatalogSuite) TestSingleService(c *check.C) {
 	s.deregisterService("test", whoami.NetworkSettings.IPAddress)
 	err = try.Request(req, 10*time.Second, try.StatusCodeIs(http.StatusNotFound), try.HasBody())
 	c.Assert(err, checker.IsNil)
-
 }
 
 func (s *ConsulCatalogSuite) TestExposedByDefaultFalseSingleService(c *check.C) {
@@ -202,13 +233,12 @@ func (s *ConsulCatalogSuite) TestExposedByDefaultFalseSimpleServiceMultipleNode(
 	defer cmd.Process.Kill()
 
 	whoami := s.composeProject.Container(c, "whoami1")
-	whoami2 := s.composeProject.Container(c, "whoami2")
-
 	err = s.registerService("test", whoami.NetworkSettings.IPAddress, 80, []string{})
 	c.Assert(err, checker.IsNil, check.Commentf("Error registering service"))
 	defer s.deregisterService("test", whoami.NetworkSettings.IPAddress)
 
-	err = s.registerService("test", whoami2.NetworkSettings.IPAddress, 80, []string{"traefik.enable=true"})
+	whoami2 := s.composeProject.Container(c, "whoami2")
+	err = s.registerService("test", whoami2.NetworkSettings.IPAddress, 80, []string{label.TraefikEnable + "=true"})
 	c.Assert(err, checker.IsNil, check.Commentf("Error registering service"))
 	defer s.deregisterService("test", whoami2.NetworkSettings.IPAddress)
 
@@ -274,7 +304,7 @@ func (s *ConsulCatalogSuite) TestRefreshConfigWithMultipleNodeWithoutHealthCheck
 	c.Assert(err, checker.IsNil, check.Commentf("Error registering service"))
 	defer s.deregisterService("test", whoami.NetworkSettings.IPAddress)
 
-	err = s.registerAgentService("test", whoami.NetworkSettings.IPAddress, 80, []string{"name=whoami1"})
+	err = s.registerAgentService("test", whoami.NetworkSettings.IPAddress, 80, []string{"name=whoami1"}, true)
 	c.Assert(err, checker.IsNil, check.Commentf("Error registering agent service"))
 	defer s.deregisterAgentService(whoami.NetworkSettings.IPAddress)
 
@@ -326,7 +356,7 @@ func (s *ConsulCatalogSuite) TestBasicAuthSimpleService(c *check.C) {
 	whoami := s.composeProject.Container(c, "whoami1")
 
 	err = s.registerService("test", whoami.NetworkSettings.IPAddress, 80, []string{
-		"traefik.frontend.auth.basic=test:$2a$06$O5NksJPAcgrC9MuANkSoE.Xe9DSg7KcLLFYNr1Lj6hPcMmvgwxhme,test2:$2y$10$xP1SZ70QbZ4K2bTGKJOhpujkpcLxQcB3kEPF6XAV19IdcqsZTyDEe",
+		label.TraefikFrontendAuthBasic + "=test:$2a$06$O5NksJPAcgrC9MuANkSoE.Xe9DSg7KcLLFYNr1Lj6hPcMmvgwxhme,test2:$2y$10$xP1SZ70QbZ4K2bTGKJOhpujkpcLxQcB3kEPF6XAV19IdcqsZTyDEe",
 	})
 	c.Assert(err, checker.IsNil, check.Commentf("Error registering service"))
 	defer s.deregisterService("test", whoami.NetworkSettings.IPAddress)
@@ -362,7 +392,8 @@ func (s *ConsulCatalogSuite) TestRefreshConfigTagChange(c *check.C) {
 
 	whoami := s.composeProject.Container(c, "whoami1")
 
-	err = s.registerService("test", whoami.NetworkSettings.IPAddress, 80, []string{"name=whoami1", "traefik.enable=false", "traefik.backend.circuitbreaker=NetworkErrorRatio() > 0.5"})
+	err = s.registerService("test", whoami.NetworkSettings.IPAddress, 80,
+		[]string{"name=whoami1", label.TraefikEnable + "=false", label.TraefikBackendCircuitBreakerExpression + "=NetworkErrorRatio() > 0.5"})
 	c.Assert(err, checker.IsNil, check.Commentf("Error registering service"))
 	defer s.deregisterService("test", whoami.NetworkSettings.IPAddress)
 
@@ -370,7 +401,8 @@ func (s *ConsulCatalogSuite) TestRefreshConfigTagChange(c *check.C) {
 		try.BodyContains(whoami.NetworkSettings.IPAddress))
 	c.Assert(err, checker.NotNil)
 
-	err = s.registerService("test", whoami.NetworkSettings.IPAddress, 80, []string{"name=whoami1", "traefik.enable=true", "traefik.backend.circuitbreaker=ResponseCodeRatio(500, 600, 0, 600) > 0.5"})
+	err = s.registerService("test", whoami.NetworkSettings.IPAddress, 80,
+		[]string{"name=whoami1", label.TraefikEnable + "=true", label.TraefikBackendCircuitBreakerExpression + "=ResponseCodeRatio(500, 600, 0, 600) > 0.5"})
 	c.Assert(err, checker.IsNil, check.Commentf("Error registering service"))
 
 	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:8000/", nil)
@@ -403,16 +435,20 @@ func (s *ConsulCatalogSuite) TestCircuitBreaker(c *check.C) {
 	defer cmd.Process.Kill()
 
 	whoami := s.composeProject.Container(c, "whoami1")
-	whoami2 := s.composeProject.Container(c, "whoami2")
-	whoami3 := s.composeProject.Container(c, "whoami3")
-
-	err = s.registerService("test", whoami.NetworkSettings.IPAddress, 80, []string{"name=whoami1", "traefik.enable=true", "traefik.backend.circuitbreaker=NetworkErrorRatio() > 0.5"})
+	err = s.registerService("test", whoami.NetworkSettings.IPAddress, 80,
+		[]string{"name=whoami1", label.TraefikEnable + "=true", label.TraefikBackendCircuitBreakerExpression + "=NetworkErrorRatio() > 0.5"})
 	c.Assert(err, checker.IsNil, check.Commentf("Error registering service"))
 	defer s.deregisterService("test", whoami.NetworkSettings.IPAddress)
-	err = s.registerService("test", whoami2.NetworkSettings.IPAddress, 42, []string{"name=whoami2", "traefik.enable=true", "traefik.backend.circuitbreaker=NetworkErrorRatio() > 0.5"})
+
+	whoami2 := s.composeProject.Container(c, "whoami2")
+	err = s.registerService("test", whoami2.NetworkSettings.IPAddress, 42,
+		[]string{"name=whoami2", label.TraefikEnable + "=true", label.TraefikBackendCircuitBreakerExpression + "=NetworkErrorRatio() > 0.5"})
 	c.Assert(err, checker.IsNil, check.Commentf("Error registering service"))
 	defer s.deregisterService("test", whoami2.NetworkSettings.IPAddress)
-	err = s.registerService("test", whoami3.NetworkSettings.IPAddress, 42, []string{"name=whoami3", "traefik.enable=true", "traefik.backend.circuitbreaker=NetworkErrorRatio() > 0.5"})
+
+	whoami3 := s.composeProject.Container(c, "whoami3")
+	err = s.registerService("test", whoami3.NetworkSettings.IPAddress, 42,
+		[]string{"name=whoami3", label.TraefikEnable + "=true", label.TraefikBackendCircuitBreakerExpression + "=NetworkErrorRatio() > 0.5"})
 	c.Assert(err, checker.IsNil, check.Commentf("Error registering service"))
 	defer s.deregisterService("test", whoami3.NetworkSettings.IPAddress)
 
@@ -452,7 +488,7 @@ func (s *ConsulCatalogSuite) TestRefreshConfigPortChange(c *check.C) {
 	err = try.GetRequest("http://127.0.0.1:8080/api/providers/consul_catalog/backends", 5*time.Second, try.BodyContains(whoami.NetworkSettings.IPAddress))
 	c.Assert(err, checker.IsNil)
 
-	err = s.registerService("test", whoami.NetworkSettings.IPAddress, 80, []string{"name=whoami1", "traefik.enable=true"})
+	err = s.registerService("test", whoami.NetworkSettings.IPAddress, 80, []string{"name=whoami1", label.TraefikEnable + "=true"})
 	c.Assert(err, checker.IsNil, check.Commentf("Error registering service"))
 
 	defer s.deregisterService("test", whoami.NetworkSettings.IPAddress)
@@ -465,7 +501,7 @@ func (s *ConsulCatalogSuite) TestRefreshConfigPortChange(c *check.C) {
 }
 
 func (s *ConsulCatalogSuite) TestRetryWithConsulServer(c *check.C) {
-	//Scale consul to 0 to be able to start traefik before and test retry
+	// Scale consul to 0 to be able to start traefik before and test retry
 	s.composeProject.Scale(c, "consul", 0)
 
 	cmd, display := s.traefikCmd(
@@ -494,7 +530,8 @@ func (s *ConsulCatalogSuite) TestRetryWithConsulServer(c *check.C) {
 
 	// Scale consul to 1
 	s.composeProject.Scale(c, "consul", 1)
-	s.waitToElectConsulLeader()
+	err = s.waitToElectConsulLeader()
+	c.Assert(err, checker.IsNil)
 
 	whoami := s.composeProject.Container(c, "whoami1")
 	// Register service
@@ -506,6 +543,136 @@ func (s *ConsulCatalogSuite) TestRetryWithConsulServer(c *check.C) {
 	c.Assert(err, checker.IsNil)
 
 	// Should be ok
+	err = try.Request(req, 10*time.Second, try.StatusCodeIs(http.StatusOK), try.HasBody())
+	c.Assert(err, checker.IsNil)
+}
+
+func (s *ConsulCatalogSuite) TestServiceWithMultipleHealthCheck(c *check.C) {
+	// Scale consul to 0 to be able to start traefik before and test retry
+	s.composeProject.Scale(c, "consul", 0)
+
+	cmd, display := s.traefikCmd(
+		withConfigFile("fixtures/consul_catalog/simple.toml"),
+		"--consulCatalog",
+		"--consulCatalog.watch=false",
+		"--consulCatalog.exposedByDefault=true",
+		"--consulCatalog.endpoint="+s.consulIP+":8500",
+		"--consulCatalog.domain=consul.localhost")
+	defer display(c)
+	err := cmd.Start()
+	c.Assert(err, checker.IsNil)
+	defer cmd.Process.Kill()
+
+	// Wait for Traefik to turn ready.
+	err = try.GetRequest("http://127.0.0.1:8000/", 2*time.Second, try.StatusCodeIs(http.StatusNotFound))
+	c.Assert(err, checker.IsNil)
+
+	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:8000/", nil)
+	c.Assert(err, checker.IsNil)
+	req.Host = "test.consul.localhost"
+
+	// Request should fail
+	err = try.Request(req, 2*time.Second, try.StatusCodeIs(http.StatusNotFound), try.HasBody())
+	c.Assert(err, checker.IsNil)
+
+	// Scale consul to 1
+	s.composeProject.Scale(c, "consul", 1)
+	err = s.waitToElectConsulLeader()
+	c.Assert(err, checker.IsNil)
+
+	whoami := s.composeProject.Container(c, "whoami1")
+	// Register service
+	err = s.registerAgentService("test", whoami.NetworkSettings.IPAddress, 80, []string{"name=whoami1"}, true)
+	c.Assert(err, checker.IsNil, check.Commentf("Error registering agent service"))
+	defer s.deregisterAgentService(whoami.NetworkSettings.IPAddress)
+
+	// Register one healthcheck
+	err = s.registerCheck("test", whoami.NetworkSettings.IPAddress, 80)
+	c.Assert(err, checker.IsNil, check.Commentf("Error registering check"))
+
+	// Provider consul catalog should be present
+	err = try.GetRequest("http://127.0.0.1:8080/api/providers", 10*time.Second, try.BodyContains("consul_catalog"))
+	c.Assert(err, checker.IsNil)
+
+	// Should be ok
+	err = try.Request(req, 10*time.Second, try.StatusCodeIs(http.StatusOK), try.HasBody())
+	c.Assert(err, checker.IsNil)
+
+	// Change health value of service to critical
+	reqHealth, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s:80/health", whoami.NetworkSettings.IPAddress), bytes.NewBuffer([]byte("500")))
+	c.Assert(err, checker.IsNil)
+	reqHealth.Host = "test.consul.localhost"
+
+	err = try.Request(reqHealth, 10*time.Second, try.StatusCodeIs(http.StatusOK))
+	c.Assert(err, checker.IsNil)
+
+	// Should be a 404
+	err = try.Request(req, 10*time.Second, try.StatusCodeIs(http.StatusNotFound), try.HasBody())
+	c.Assert(err, checker.IsNil)
+
+	// Change health value of service to passing
+	reqHealth, err = http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s:80/health", whoami.NetworkSettings.IPAddress), bytes.NewBuffer([]byte("200")))
+	c.Assert(err, checker.IsNil)
+	err = try.Request(reqHealth, 10*time.Second, try.StatusCodeIs(http.StatusOK))
+	c.Assert(err, checker.IsNil)
+
+	// Should be a 200
+	err = try.Request(req, 10*time.Second, try.StatusCodeIs(http.StatusOK), try.HasBody())
+	c.Assert(err, checker.IsNil)
+}
+
+func (s *ConsulCatalogSuite) TestMaintenanceMode(c *check.C) {
+	cmd, display := s.traefikCmd(
+		withConfigFile("fixtures/consul_catalog/simple.toml"),
+		"--consulCatalog",
+		"--consulCatalog.endpoint="+s.consulIP+":8500",
+		"--consulCatalog.domain=consul.localhost")
+	defer display(c)
+	err := cmd.Start()
+	c.Assert(err, checker.IsNil)
+	defer cmd.Process.Kill()
+
+	// Wait for Traefik to turn ready.
+	err = try.GetRequest("http://127.0.0.1:8000/", 2*time.Second, try.StatusCodeIs(http.StatusNotFound))
+	c.Assert(err, checker.IsNil)
+
+	whoami := s.composeProject.Container(c, "whoami1")
+
+	err = s.registerAgentService("test", whoami.NetworkSettings.IPAddress, 80, []string{}, false)
+	c.Assert(err, checker.IsNil, check.Commentf("Error registering service"))
+
+	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:8000/", nil)
+	c.Assert(err, checker.IsNil)
+	req.Host = "test.consul.localhost"
+
+	err = try.Request(req, 10*time.Second, try.StatusCodeIs(http.StatusOK), try.HasBody())
+	c.Assert(err, checker.IsNil)
+
+	// Enable service maintenance mode
+	err = s.consulEnableServiceMaintenance(whoami.NetworkSettings.IPAddress)
+	c.Assert(err, checker.IsNil)
+
+	err = try.Request(req, 10*time.Second, try.StatusCodeIs(http.StatusNotFound), try.HasBody())
+	c.Assert(err, checker.IsNil)
+
+	// Disable service maintenance mode
+	err = s.consulDisableServiceMaintenance(whoami.NetworkSettings.IPAddress)
+	c.Assert(err, checker.IsNil)
+
+	err = try.Request(req, 10*time.Second, try.StatusCodeIs(http.StatusOK), try.HasBody())
+	c.Assert(err, checker.IsNil)
+
+	// Enable node maintenance mode
+	err = s.consulEnableNodeMaintenance()
+	c.Assert(err, checker.IsNil)
+
+	err = try.Request(req, 10*time.Second, try.StatusCodeIs(http.StatusNotFound), try.HasBody())
+	c.Assert(err, checker.IsNil)
+
+	// Disable node maintenance mode
+	err = s.consulDisableNodeMaintenance()
+	c.Assert(err, checker.IsNil)
+
 	err = try.Request(req, 10*time.Second, try.StatusCodeIs(http.StatusOK), try.HasBody())
 	c.Assert(err, checker.IsNil)
 }
